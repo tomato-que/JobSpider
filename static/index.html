@@ -1,0 +1,4555 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JobSpider — 多智能体自动投递系统</title>
+<style>
+  /* === FONTS ===
+     编辑/公报美学：Fraunces 衬线作 display（可变字体，有性格），
+     IBM Plex Sans 作 body（带技术质感的人文无衬线），JetBrains Mono 留数据列。
+     刻意避开 Inter / Roboto / 系统默认这些 "AI-slop" 字体。 */
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,800&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&family=Source+Serif+4:wght@400;500;600;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
+<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700;9..144,800&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&family=Source+Serif+4:wght@400;500;600;700&display=swap"></noscript>
+<style>
+
+  /* === DESIGN TOKENS ===
+     主题：Editorial Bulletin — 暖米纸底色 + 墨色文字 + 柠檬黄强调
+     变量名保留旧名（HTML/CSS 内联仍按旧名引用），只改值。 */
+  :root {
+    /* 背景层（从外到内，米纸→白卡） */
+    --bg-root:     #f5f1e6;      /* 页面底色：暖米纸 */
+    --bg-base:     #faf6ec;      /* 次级背景 */
+    --bg-raised:   #ffffff;      /* 卡片：纯白浮在米纸上 */
+    --bg-surface:  #ede6d4;      /* 表头 / 工具条：略深米色 */
+    --bg-input:    #ffffff;
+    --bg-stamp:    #1a1814;      /* 反相墨色 surface（chip / 标记） */
+
+    /* 边框（hairline 风格，warmer grays） */
+    --border-subtle: #e7decb;
+    --border-base:   #d2c6a8;
+    --border-hover:  #aa9d7d;
+    --border-ink:    #1a1814;    /* 强调边框：直接墨色 */
+
+    /* 文本（从浅到深 — 都带轻微暖色） */
+    --text-muted:  #9e9684;
+    --text-dim:    #6f6857;
+    --text-body:   #4a4538;
+    --text-main:   #2a261c;
+    --text-bright: #1a1814;      /* ink black with warmth */
+
+    /* 主色：墨黑（替代旧紫色，所有变量名沿用以避免改动调用处） */
+    --accent:        #1a1814;    /* 主操作色：墨色 */
+    --accent-soft:   #2a261c;
+    --accent-glow:   rgba(26,24,20,0.10);
+    --accent-glow2:  rgba(26,24,20,0.04);
+
+    /* 高亮强调：柠檬黄 / marigold — 用于关键数字、状态点、CTA 内文 */
+    --hi:            #e6a91d;
+    --hi-deep:       #c08a0e;
+    --hi-glow:       rgba(230,169,29,0.18);
+    --hi-bg:         #fef3d4;    /* 浅米黄背景，给徽标/数字底 */
+
+    /* 状态色（编辑色调，不刺眼） */
+    --green:       #2e7d4f;
+    --green-glow:  rgba(46,125,79,0.10);
+    --red:         #a8281d;      /* newsprint red */
+    --blue:        #1e3a8a;      /* cobalt ink */
+    --purple:      #6b3b8c;      /* 备用，不再作为主色 */
+    --orange:      #b85e16;
+
+    /* 字体 */
+    --font-display: 'Fraunces', 'Source Han Serif SC', 'Noto Serif SC', Georgia, serif;
+    --font-sans:    'IBM Plex Sans', 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
+    --font-mono:    'JetBrains Mono', 'IBM Plex Mono', Consolas, monospace;
+
+    /* 圆角：克制 */
+    --radius-xs: 4px;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+
+    /* 缓动 */
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    /* 阴影：克制、偏暖 */
+    --shadow-card:     0 1px 0 rgba(42,38,28,0.04), 0 1px 3px rgba(42,38,28,0.04);
+    --shadow-elevated: 0 2px 4px rgba(42,38,28,0.06), 0 16px 32px rgba(42,38,28,0.08);
+    --shadow-primary:  0 1px 2px rgba(26,24,20,0.18), 0 6px 14px rgba(26,24,20,0.16);
+
+    /* body 背景渐变（per-theme 覆盖） */
+    --bg-image:
+      radial-gradient(1200px 600px at 12% -10%, rgba(230,169,29,0.10), transparent 60%),
+      radial-gradient(900px 500px at 90% 0%, rgba(37,112,208,0.05), transparent 60%),
+      radial-gradient(800px 600px at 50% 110%, rgba(192,138,14,0.05), transparent 70%);
+  }
+
+  /* ===== 主题：终端 / Terminal ===== */
+  html[data-theme="terminal"] {
+    --bg-root:     #0d1117;
+    --bg-base:     #0f1419;
+    --bg-raised:   #161b22;
+    --bg-surface:  #1c232c;
+    --bg-input:    #0d1117;
+    --bg-stamp:    #c9d1d9;
+    --border-subtle: #21262d;
+    --border-base:   #30363d;
+    --border-hover:  #484f58;
+    --border-ink:    #c9d1d9;
+    --text-muted:  #6e7681;
+    --text-dim:    #8b949e;
+    --text-body:   #adbac7;
+    --text-main:   #c9d1d9;
+    --text-bright: #e6edf3;
+    --accent:        #58a6ff;
+    --accent-soft:   #79b8ff;
+    --accent-glow:   rgba(88,166,255,0.22);
+    --accent-glow2:  rgba(88,166,255,0.10);
+    --hi:            #f0883e;
+    --hi-deep:       #db6d28;
+    --hi-glow:       rgba(240,136,62,0.22);
+    --hi-bg:         rgba(240,136,62,0.14);
+    --green:       #3fb950;
+    --green-glow:  rgba(63,185,80,0.16);
+    --red:         #f85149;
+    --blue:        #58a6ff;
+    --purple:      #bc8cff;
+    --orange:      #f0883e;
+    --font-display: 'JetBrains Mono', 'IBM Plex Mono', Consolas, monospace;
+    --font-sans:    'JetBrains Mono', 'IBM Plex Mono', Consolas, monospace;
+    --font-mono:    'JetBrains Mono', 'IBM Plex Mono', Consolas, monospace;
+    --shadow-card:     0 0 0 1px rgba(255,255,255,0.02), 0 1px 3px rgba(0,0,0,0.4);
+    --shadow-elevated: 0 8px 24px rgba(0,0,0,0.5);
+    --shadow-primary:  0 0 0 1px rgba(88,166,255,0.4), 0 4px 14px rgba(88,166,255,0.3);
+    --bg-image:
+      radial-gradient(1100px 500px at 10% -10%, rgba(88,166,255,0.10), transparent 60%),
+      radial-gradient(900px 500px at 90% 0%, rgba(240,136,62,0.06), transparent 60%);
+  }
+
+  /* ===== 主题：现代极简 / Minimal ===== */
+  html[data-theme="minimal"] {
+    --bg-root:     #ffffff;
+    --bg-base:     #fafbfc;
+    --bg-raised:   #ffffff;
+    --bg-surface:  #f7f8fa;
+    --bg-input:    #ffffff;
+    --bg-stamp:    #1f2328;
+    --border-subtle: #eef0f3;
+    --border-base:   #e4e7eb;
+    --border-hover:  #c8ccd2;
+    --border-ink:    #1f2328;
+    --text-muted:  #9ca3af;
+    --text-dim:    #6b7280;
+    --text-body:   #4b5563;
+    --text-main:   #1f2328;
+    --text-bright: #0b0e12;
+    --accent:        #5b67ff;
+    --accent-soft:   #7c86ff;
+    --accent-glow:   rgba(91,103,255,0.16);
+    --accent-glow2:  rgba(91,103,255,0.05);
+    --hi:            #5b67ff;
+    --hi-deep:       #3d4adb;
+    --hi-glow:       rgba(91,103,255,0.20);
+    --hi-bg:         #eef0ff;
+    --green:       #10b981;
+    --green-glow:  rgba(16,185,129,0.10);
+    --red:         #ef4444;
+    --blue:        #5b67ff;
+    --purple:      #8b5cf6;
+    --orange:      #f97316;
+    --font-display: 'Inter', 'Plus Jakarta Sans', 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
+    --font-sans:    'Inter', 'Plus Jakarta Sans', 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
+    --font-mono:    'JetBrains Mono', 'IBM Plex Mono', Consolas, monospace;
+    --shadow-card:     0 1px 0 rgba(15,23,42,0.04), 0 1px 3px rgba(15,23,42,0.03);
+    --shadow-elevated: 0 6px 20px rgba(15,23,42,0.07);
+    --shadow-primary:  0 1px 2px rgba(91,103,255,0.18), 0 6px 14px rgba(91,103,255,0.18);
+    --bg-image: none;
+  }
+
+  /* ===== 主题：暖暮深咖 / Dusk ===== */
+  html[data-theme="dusk"] {
+    --bg-root:     #1f1813;
+    --bg-base:     #251c16;
+    --bg-raised:   #2a2118;
+    --bg-surface:  #34281e;
+    --bg-input:    #1f1813;
+    --bg-stamp:    #ede0ce;
+    --border-subtle: #3a2d20;
+    --border-base:   #4a3a2a;
+    --border-hover:  #6b5440;
+    --border-ink:    #ede0ce;
+    --text-muted:  #8a7864;
+    --text-dim:    #b09a82;
+    --text-body:   #d3c2a8;
+    --text-main:   #ede0ce;
+    --text-bright: #fbf3e3;
+    --accent:        #d96b3a;
+    --accent-soft:   #e88556;
+    --accent-glow:   rgba(217,107,58,0.25);
+    --accent-glow2:  rgba(217,107,58,0.08);
+    --hi:            #e8b85c;
+    --hi-deep:       #c79644;
+    --hi-glow:       rgba(232,184,92,0.22);
+    --hi-bg:         rgba(232,184,92,0.14);
+    --green:       #5ba668;
+    --green-glow:  rgba(91,166,104,0.14);
+    --red:         #d8553a;
+    --blue:        #7ba3d1;
+    --purple:      #b07cc4;
+    --orange:      #d96b3a;
+    --font-display: 'Source Serif 4', 'Source Han Serif SC', 'Noto Serif SC', Georgia, serif;
+    --font-sans:    'IBM Plex Sans', 'Plus Jakarta Sans', 'Noto Sans SC', system-ui, sans-serif;
+    --font-mono:    'JetBrains Mono', 'IBM Plex Mono', Consolas, monospace;
+    --shadow-card:     0 0 0 1px rgba(255,224,180,0.02), 0 2px 4px rgba(0,0,0,0.3);
+    --shadow-elevated: 0 8px 28px rgba(0,0,0,0.5);
+    --shadow-primary:  0 1px 2px rgba(217,107,58,0.25), 0 6px 16px rgba(217,107,58,0.30);
+    --bg-image:
+      radial-gradient(1200px 600px at 12% -10%, rgba(217,107,58,0.10), transparent 60%),
+      radial-gradient(900px 500px at 90% 0%, rgba(232,184,92,0.06), transparent 60%);
+  }
+
+  /* ===== 主题：冷静学术蓝 / Azure ===== */
+  html[data-theme="azure"] {
+    --bg-root:     #f4f6fa;
+    --bg-base:     #eef2f8;
+    --bg-raised:   #ffffff;
+    --bg-surface:  #e7edf5;
+    --bg-input:    #ffffff;
+    --bg-stamp:    #0f2845;
+    --border-subtle: #e3e9f1;
+    --border-base:   #d6dee9;
+    --border-hover:  #a9b8cc;
+    --border-ink:    #0f2845;
+    --text-muted:  #8a9bb3;
+    --text-dim:    #6679a0;
+    --text-body:   #2c3f5a;
+    --text-main:   #0f2845;
+    --text-bright: #061a30;
+    --accent:        #2563eb;
+    --accent-soft:   #3b82f6;
+    --accent-glow:   rgba(37,99,235,0.16);
+    --accent-glow2:  rgba(37,99,235,0.05);
+    --hi:            #0ea5e9;
+    --hi-deep:       #0369a1;
+    --hi-glow:       rgba(14,165,233,0.18);
+    --hi-bg:         #e0f2fe;
+    --green:       #059669;
+    --green-glow:  rgba(5,150,105,0.10);
+    --red:         #dc2626;
+    --blue:        #2563eb;
+    --purple:      #7c3aed;
+    --orange:      #ea580c;
+    --font-display: 'Source Serif 4', 'Source Han Serif SC', 'Noto Serif SC', Georgia, serif;
+    --font-sans:    'Inter', 'IBM Plex Sans', 'Noto Sans SC', system-ui, sans-serif;
+    --font-mono:    'JetBrains Mono', 'IBM Plex Mono', Consolas, monospace;
+    --shadow-card:     0 1px 0 rgba(15,40,69,0.04), 0 1px 3px rgba(15,40,69,0.04);
+    --shadow-elevated: 0 8px 24px rgba(15,40,69,0.09);
+    --shadow-primary:  0 1px 2px rgba(37,99,235,0.2), 0 6px 14px rgba(37,99,235,0.20);
+    --bg-image:
+      radial-gradient(1100px 500px at 12% -10%, rgba(37,99,235,0.08), transparent 60%),
+      radial-gradient(800px 400px at 90% 0%, rgba(14,165,233,0.05), transparent 60%);
+  }
+
+  /* === 主题切换器 === */
+  .theme-switch {
+    display: inline-flex; gap: 4px;
+    padding: 3px; background: var(--bg-surface);
+    border: 1px solid var(--border-subtle); border-radius: 999px;
+    align-items: center;
+  }
+  .theme-swatch {
+    width: 20px; height: 20px; border-radius: 999px;
+    cursor: pointer; position: relative;
+    border: 2px solid transparent;
+    transition: transform 150ms var(--ease-out), border-color 150ms;
+  }
+  .theme-swatch:hover { transform: scale(1.12) }
+  .theme-swatch.active { border-color: var(--accent) }
+  .theme-swatch[data-key="bulletin"] { background: linear-gradient(135deg, #f5f1e6 50%, #e6a91d 50%) }
+  .theme-swatch[data-key="terminal"] { background: linear-gradient(135deg, #0d1117 50%, #58a6ff 50%) }
+  .theme-swatch[data-key="minimal"]  { background: linear-gradient(135deg, #ffffff 50%, #5b67ff 50%); border: 2px solid var(--border-subtle) }
+  .theme-swatch[data-key="minimal"].active { border-color: var(--accent) }
+  .theme-swatch[data-key="dusk"]     { background: linear-gradient(135deg, #2a2118 50%, #d96b3a 50%) }
+  .theme-swatch[data-key="azure"]    { background: linear-gradient(135deg, #f4f6fa 50%, #2563eb 50%) }
+
+  /* === RESET === */
+  *, *::before, *::after { box-sizing:border-box; margin:0; padding:0 }
+  html { font-size: 15px; -webkit-font-smoothing: antialiased; }
+  body {
+    background: var(--bg-root);
+    color: var(--text-body);
+    font-family: var(--font-sans);
+    font-weight: 400;
+    line-height: 1.55;
+    min-height: 100vh;
+    background-image: var(--bg-image);
+    background-attachment: fixed;
+  }
+
+  /* === SCROLLBAR === */
+  ::-webkit-scrollbar { width:10px; height:10px }
+  ::-webkit-scrollbar-track { background:transparent }
+  ::-webkit-scrollbar-thumb { background: #dcdce7; border-radius:6px; border:2px solid var(--bg-root) }
+  ::-webkit-scrollbar-thumb:hover { background: #b6b6c8 }
+
+  /* === LAYOUT === */
+  .app-shell {
+    max-width: 1520px;
+    margin: 0 auto;
+    padding: 32px 36px 56px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  /* === HEADER === */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 4px 22px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .brand { display:flex; align-items:center; gap:14px }
+  .brand-mark {
+    width: 46px; height: 46px;
+    background: linear-gradient(135deg, #1a1814 0%, #2a261c 70%, #3a3424 100%);
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px;
+    color: #fff;
+    box-shadow:
+      0 6px 14px rgba(26, 24, 20, 0.32),
+      inset 0 1px 0 rgba(255,255,255,0.35);
+    position: relative;
+  }
+  .brand-mark::after {
+    content: '';
+    position: absolute; inset: 1px;
+    border-radius: 13px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.18), transparent 50%);
+    pointer-events: none;
+  }
+  .brand-text h1 {
+    font-family: var(--font-display);
+    font-size: 26px; font-weight: 700; font-style: normal;
+    color: var(--text-bright);
+    letter-spacing: -0.5px;
+    line-height: 1.05;
+  }
+  .brand-text h1 span {
+    color: var(--accent);
+    background: linear-gradient(120deg, var(--accent) 0%, var(--hi-deep) 100%);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .brand-text .tagline {
+    font-family: var(--font-mono); font-size: 10.5px;
+    color: var(--text-muted); letter-spacing: 1.6px;
+    text-transform: uppercase; margin-top: 5px;
+  }
+  .sys-status {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 7px 14px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    font-family: var(--font-mono); font-size: 11.5px;
+    color: var(--text-body);
+    box-shadow: var(--shadow-card);
+  }
+  .pulse {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 0 rgba(21,160,90,0.5);
+    animation: pulseDot 2.2s ease-in-out infinite;
+  }
+  @keyframes pulseDot {
+    0%   { box-shadow: 0 0 0 0 rgba(21,160,90,0.45) }
+    70%  { box-shadow: 0 0 0 7px rgba(21,160,90,0) }
+    100% { box-shadow: 0 0 0 0 rgba(21,160,90,0) }
+  }
+
+  /* === MAIN GRID === */
+  .layout { display:grid; grid-template-columns:360px minmax(0, 1fr); gap:24px }
+
+  /* === PANEL === */
+  .panel {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 22px;
+    box-shadow: var(--shadow-card);
+    transition: border-color 220ms var(--ease-out), box-shadow 220ms var(--ease-out);
+  }
+  .panel:hover { border-color: var(--border-base) }
+  .panel-label {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+    color: var(--text-dim); letter-spacing: 1.2px;
+    text-transform: uppercase; margin-bottom: 18px;
+  }
+  .panel-label::before {
+    content: '';
+    width: 4px; height: 14px; border-radius: 3px;
+    background: linear-gradient(180deg, var(--accent), var(--hi));
+  }
+
+  /* === FORM === */
+  .field { margin-bottom: 16px }
+  .field-hint {
+    display: block; font-size: 11px; font-family: var(--font-sans);
+    color: var(--text-dim); letter-spacing: 0.2px;
+    margin-bottom: 6px; font-weight: 600;
+  }
+  .input, .select {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-xs);
+    padding: 10px 13px;
+    color: var(--text-main);
+    font-family: var(--font-sans); font-size: 14px;
+    outline: none;
+    transition: all 180ms var(--ease-out);
+  }
+  .input:hover, .select:hover { border-color: var(--border-hover) }
+  .input:focus, .select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-glow2);
+  }
+  .input::placeholder { color: var(--text-muted) }
+  .select {
+    cursor: pointer; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6' fill='none' stroke='%237878a0' stroke-width='1.3'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 13px center;
+    padding-right: 32px;
+  }
+  .select option { background:#fff; color:var(--text-main) }
+  textarea.input { line-height: 1.5; font-size: 13px; }
+  .row-2 { display:grid; grid-template-columns:1fr 1fr; gap:10px }
+  .row-3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px }
+
+  /* === PLATFORM CHIPS === */
+  .chip-group { display:flex; flex-wrap:wrap; gap:7px }
+  .chip { position:relative }
+  .chip input { position:absolute; opacity:0; pointer-events:none }
+  .chip label {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 7px 14px; border-radius: 999px;
+    border: 1px solid var(--border-base);
+    font-size: 12.5px; font-weight: 500; color: var(--text-body);
+    cursor: pointer; user-select: none;
+    background: var(--bg-raised);
+    transition: all 180ms var(--ease-out);
+  }
+  .chip label:hover {
+    border-color: var(--border-hover);
+    color: var(--text-bright);
+    transform: translateY(-1px);
+  }
+  .chip input:checked + label {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-glow2);
+    font-weight: 600;
+  }
+  .chip-dot { width:6px; height:6px; border-radius:50% }
+
+  /* === BUTTONS === */
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 11px 22px; border-radius: var(--radius-xs);
+    font-family: var(--font-sans); font-size: 13px; font-weight: 600;
+    cursor: pointer; border: 1px solid transparent;
+    transition: all 180ms var(--ease-out);
+    letter-spacing: 0.1px; text-decoration: none;
+    white-space: nowrap; line-height: 1;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, #1a1814 0%, #2a261c 60%, #c08a0e 100%);
+    color: #fff;
+    border: none;
+    box-shadow: var(--shadow-primary);
+  }
+  .btn-primary:hover {
+    box-shadow: 0 10px 28px rgba(26,24,20,0.32), 0 0 0 1px rgba(230,169,29,0.20) inset;
+    transform: translateY(-1px);
+  }
+  .btn-primary:active { transform:translateY(0); box-shadow: 0 4px 12px rgba(26,24,20,0.26) }
+  .btn-primary:disabled { opacity:0.45; cursor:not-allowed; box-shadow:none; transform:none }
+  .btn-danger {
+    background: linear-gradient(135deg, #ff5e7e 0%, #d8344e 100%);
+    color: #fff;
+    border: none;
+    box-shadow: 0 6px 18px rgba(216,52,78,0.28);
+  }
+  .btn-danger:hover {
+    box-shadow: 0 10px 28px rgba(216,52,78,0.36);
+    transform: translateY(-1px);
+  }
+  .btn-danger:active { transform:translateY(0) }
+  .btn-danger:disabled { opacity:0.5; cursor:not-allowed }
+  .btn-ghost {
+    background: var(--bg-raised);
+    color: var(--text-body);
+    border-color: var(--border-base);
+  }
+  .btn-ghost:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-glow2);
+  }
+  .btn-sm { padding:7px 14px; font-size:12px }
+  .btn-group { display:flex; gap:8px; flex-wrap:wrap }
+
+  /* === PROGRESS CARDS === */
+  .progress-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .prog-card {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 16px 18px;
+    position: relative; overflow: hidden;
+    transition: all 280ms var(--ease-out);
+    box-shadow: var(--shadow-card);
+  }
+  .prog-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-elevated); border-color: var(--border-base) }
+  .prog-card .topline {
+    position: absolute; top:0; left:0; right:0; height:3px;
+    background: var(--border-subtle);
+    transition: all 500ms var(--ease-out);
+  }
+  .prog-card[data-status="running"] .topline {
+    background: linear-gradient(90deg, var(--accent), var(--hi));
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+  .prog-card[data-status="done"] .topline { background: var(--green) }
+  .prog-card[data-status="error"] .topline { background: var(--red) }
+  @keyframes shimmer { 0%,100%{opacity:1} 50%{opacity:0.5} }
+  .prog-card .pc-row {
+    display:flex; justify-content:space-between; align-items:center;
+    margin-bottom: 10px;
+  }
+  .prog-card .pc-name { font-size:13.5px; font-weight:600; color:var(--text-main) }
+  .prog-card .pc-count {
+    font-family: var(--font-mono); font-size: 28px; font-weight: 600;
+    color: var(--text-bright); letter-spacing: -1.2px;
+  }
+  .prog-card .pc-badge {
+    display: inline-block;
+    font-family: var(--font-mono); font-size: 9.5px; font-weight: 600;
+    letter-spacing: 1px; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 10px;
+    background: var(--bg-surface); color: var(--text-dim);
+    border: 1px solid var(--border-subtle);
+  }
+  .prog-card[data-status="running"] .pc-badge { color: var(--accent); background: var(--accent-glow2); border-color: var(--accent) }
+  .prog-card[data-status="done"] .pc-badge { color: var(--green); background: var(--green-glow); border-color: var(--green) }
+  .prog-card[data-status="error"] .pc-badge { color: var(--red); background: rgba(216,52,78,0.10); border-color: var(--red) }
+  .prog-card .progress-track {
+    height: 3px; border-radius: 2px;
+    background: var(--border-subtle); margin-top: 12px;
+    transition: all 700ms var(--ease-out);
+  }
+  .prog-card[data-status="running"] .progress-track { background: linear-gradient(90deg, var(--accent), var(--hi)) }
+  .prog-card[data-status="done"] .progress-track { background: var(--green) }
+
+  /* === STATS === */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .stat-card {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 18px 20px;
+    position: relative; overflow: hidden;
+    transition: all 220ms var(--ease-out);
+    box-shadow: var(--shadow-card);
+  }
+  .stat-card::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: linear-gradient(180deg, var(--accent), var(--hi));
+    opacity: 0;
+    transition: opacity 220ms var(--ease-out);
+  }
+  .stat-card:hover { transform: translateY(-2px); border-color: var(--border-base); box-shadow: var(--shadow-elevated) }
+  .stat-card:hover::before { opacity: 1 }
+  .stat-card .stat-val {
+    font-family: var(--font-display); font-size: 32px; font-weight: 700;
+    color: var(--text-bright); letter-spacing: -1.5px; line-height: 1;
+  }
+  .stat-card .stat-hint {
+    font-size: 11px; font-family: var(--font-mono);
+    color: var(--text-dim); letter-spacing: 0.8px;
+    margin-top: 8px; text-transform: uppercase; font-weight: 500;
+  }
+  .stat-card .stat-icon {
+    position: absolute; top: 16px; right: 16px;
+    font-size: 22px; opacity: 0.18;
+    filter: grayscale(0.2);
+  }
+
+  /* === TABLE === */
+  .table-shell {
+    overflow-x: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--bg-raised);
+  }
+  .tbl-pager {
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 10px 0 2px; font-size: 12px; color: var(--text-muted);
+  }
+  .tbl-pager button {
+    background: var(--bg-surface); border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs); padding: 3px 10px; cursor: pointer;
+    font-size: 12px; color: var(--text-body);
+  }
+  .tbl-pager button:hover { border-color: var(--accent); color: var(--accent) }
+  .tbl-pager button:disabled { opacity: .35; cursor: default; border-color: var(--border-subtle); color: var(--text-dim) }
+  .tbl-pager .pg-cur { font-weight: 600; color: var(--accent) }
+  .tbl-pager .pg-dots { padding: 0 2px; }
+  .tbl {
+    width: 100%; border-collapse: collapse; font-size: 13px;
+  }
+  .tbl thead th {
+    background: var(--bg-surface);
+    padding: 12px 16px;
+    text-align: left;
+    font-family: var(--font-sans); font-size: 11px; font-weight: 600;
+    color: var(--text-dim);
+    letter-spacing: 0.5px; text-transform: uppercase;
+    border-bottom: 1px solid var(--border-subtle);
+    white-space: nowrap; cursor: pointer;
+    transition: color 180ms; user-select: none;
+  }
+  .tbl thead th:hover { color: var(--accent) }
+  .tbl thead th.sorted { color: var(--accent) }
+  .tbl tbody td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--text-body);
+    max-width: 280px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tbl tbody tr { transition: background 160ms }
+  .tbl tbody tr:hover { background: var(--accent-glow2) }
+  .tbl tbody tr:last-child td { border-bottom: none }
+  .tbl .td-title { color: var(--text-main); font-weight: 600 }
+  .tbl .td-salary {
+    font-family: var(--font-mono); font-size: 12.5px;
+    color: var(--accent); font-weight: 600;
+  }
+  .tbl .td-platform {
+    display: inline-block;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: 11px; font-family: var(--font-sans); font-weight: 600;
+    border: 1px solid currentColor;
+  }
+  .pf-boss { color:#0d8aa6; background:rgba(13,138,166,0.08); border-color:rgba(13,138,166,0.25) !important }
+  .pf-zl   { color:#4b59b8; background:rgba(75,89,184,0.08); border-color:rgba(75,89,184,0.25) !important }
+  .pf-51   { color:#c46228; background:rgba(196,98,40,0.08); border-color:rgba(196,98,40,0.25) !important }
+  .pf-lp   { color:#0d8a52; background:rgba(13,138,82,0.08); border-color:rgba(13,138,82,0.25) !important }
+  .tbl a { color:var(--accent); text-decoration:none; transition:opacity 180ms; font-weight: 600 }
+  .tbl a:hover { opacity:0.7 }
+  .td-detail { font-size:11.5px; display:block; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .td-greeting { color:var(--green); cursor:help }
+  .td-skip { color:var(--text-muted) }
+  .td-fail { color:var(--red) }
+
+  .empty {
+    text-align: center; padding: 80px 20px;
+    color: var(--text-muted);
+  }
+  .empty .empty-glyph {
+    font-size: 56px; margin-bottom: 16px;
+    opacity: 0.20;
+    color: var(--accent);
+  }
+  .empty .empty-text {
+    font-family: var(--font-mono); font-size: 12px;
+    letter-spacing: 1px; color: var(--text-dim);
+  }
+
+  /* === RESPONSIVE === */
+  @media (max-width: 1150px) {
+    .layout { grid-template-columns:1fr }
+    .progress-row { grid-template-columns: repeat(2, 1fr) }
+    .stats-row { grid-template-columns: repeat(2, 1fr) }
+  }
+  @media (max-width: 640px) {
+    .app-shell { padding: 14px }
+    .progress-row { grid-template-columns: 1fr }
+    .stats-row { grid-template-columns: 1fr }
+    .row-2, .row-3 { grid-template-columns: 1fr }
+    .header { flex-direction:column; gap:12px; align-items:flex-start }
+  }
+
+  /* === JOB PILLS (multi-select) === */
+  .job-pill { position: relative }
+  .job-pill input { position: absolute; opacity: 0; pointer-events: none }
+  .job-pill label {
+    display: inline-block; padding: 5px 11px; border-radius: 999px;
+    border: 1px solid var(--border-base); background: var(--bg-raised);
+    font-size: 12px; color: var(--text-body); cursor: pointer;
+    user-select: none; line-height: 1.4;
+    transition: all 150ms var(--ease-out);
+  }
+  .job-pill label:hover { border-color: var(--border-hover); color: var(--text-bright) }
+  .job-pill input:checked + label {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-glow2);
+    font-weight: 600;
+  }
+
+  /* === CITY COMBO DROPDOWN === */
+  .city-combo { position: relative }
+  .city-combo-trigger {
+    display:flex; flex-wrap:wrap; align-items:center; gap:6px;
+    min-height: 38px; padding: 6px 32px 6px 10px;
+    background: var(--bg-raised); border: 1px solid var(--border-base);
+    border-radius: var(--radius-sm); cursor: pointer;
+    font-size: 12px; transition: border-color 120ms var(--ease-out), box-shadow 120ms var(--ease-out);
+    position: relative;
+  }
+  .city-combo-trigger:hover { border-color: var(--border-hover) }
+  .city-combo.open .city-combo-trigger {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--hi-glow);
+  }
+  .city-placeholder { color: var(--text-muted); align-self: center }
+  .city-caret {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    color: var(--text-muted); font-size: 11px; pointer-events: none;
+    transition: transform 160ms var(--ease-out);
+  }
+  .city-combo.open .city-caret { transform: translateY(-50%) rotate(180deg); color: var(--accent) }
+  .city-combo-pop {
+    display: none; position: absolute; left: 0; right: 0; top: calc(100% + 4px);
+    z-index: 50; padding: 10px;
+    background: var(--bg-raised); border: 1px solid var(--border-base);
+    border-radius: var(--radius-xs);
+    box-shadow: 0 12px 32px rgba(20, 14, 60, 0.12), 0 2px 8px rgba(20, 14, 60, 0.06);
+    max-height: 320px; overflow-y: auto;
+    animation: paneIn 160ms var(--ease-out) both;
+  }
+  .city-combo.open .city-combo-pop { display: block }
+  .city-combo-body { margin-top: 8px }
+
+  /* === CITY MULTI-SELECT === */
+  .city-tag {
+    display:inline-flex; align-items:center; gap:5px;
+    padding:4px 10px; border-radius: 999px;
+    background: var(--accent-glow2); color: var(--accent);
+    border: 1px solid var(--accent);
+    font-size: 11.5px; font-family: var(--font-sans); font-weight: 600;
+  }
+  .city-tag-x {
+    cursor:pointer; opacity:.55; font-weight:700;
+    line-height:1; padding-left:3px; font-size: 13px;
+  }
+  .city-tag-x:hover { opacity:1 }
+  .city-pill {
+    display:inline-block; padding: 4px 10px; margin: 2px;
+    border-radius: 999px; border: 1px solid var(--border-base);
+    background: var(--bg-raised); font-size: 11.5px;
+    color: var(--text-body); cursor: pointer; user-select:none;
+    transition: all 130ms var(--ease-out);
+  }
+  .city-pill:hover { color: var(--accent); border-color: var(--accent); transform: translateY(-1px) }
+  .city-pill.active {
+    background: var(--accent-glow2); color: var(--accent);
+    border-color: var(--accent); font-weight: 600;
+  }
+  .prov-label {
+    font-size: 10.5px; color: var(--text-dim);
+    margin: 12px 0 6px; font-family: var(--font-mono);
+    text-transform: uppercase; letter-spacing: 0.1em; font-weight: 600;
+  }
+
+  /* === RESULT FILTER BAR === */
+  .filter-bar {
+    display:flex; flex-wrap:wrap; gap:8px; align-items:center;
+    padding: 10px 12px; margin-bottom: 12px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs);
+  }
+  .filter-bar select, .filter-bar input {
+    height: 30px; padding: 0 10px; font-size: 12.5px;
+    background: var(--bg-raised); border:1px solid var(--border-base);
+    border-radius: 8px; color: var(--text-main);
+    font-family: var(--font-sans); outline: none;
+    transition: all 150ms var(--ease-out);
+  }
+  .filter-bar select:hover, .filter-bar input:hover { border-color: var(--border-hover) }
+  .filter-bar select:focus, .filter-bar input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow2);
+  }
+  .filter-bar input { width: 130px }
+  .filter-bar .lbl {
+    font-size: 11.5px; color: var(--text-dim); font-weight: 600;
+    font-family: var(--font-sans);
+  }
+  .stat-pill {
+    display:inline-flex; align-items:center; gap:4px;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: 11px; font-family: var(--font-sans); font-weight: 600;
+    border: 1px solid currentColor;
+  }
+  .stat-pill.applied { background: rgba(21,160,90,0.10); color: var(--green); border-color: rgba(21,160,90,0.30) !important }
+  .stat-pill.skipped { background: rgba(156,156,172,0.12); color: var(--text-dim); border-color: rgba(156,156,172,0.30) !important }
+  .stat-pill.failed  { background: rgba(216,52,78,0.10); color: var(--red); border-color: rgba(216,52,78,0.30) !important }
+
+  /* === UTILITY === */
+  .hidden { display: none !important }
+
+  /* === TOAST === */
+  .toast-layer {
+    position: fixed; top: 24px; right: 24px;
+    z-index: 10000; display: flex; flex-direction: column; gap: 8px;
+  }
+  .toast {
+    padding: 13px 22px; border-radius: var(--radius-sm);
+    font-family: var(--font-sans); font-size: 13px; font-weight: 500;
+    background: var(--bg-raised); border: 1px solid var(--border-base);
+    color: var(--text-main);
+    animation: toastIn 350ms var(--ease-spring);
+    max-width: 400px;
+    box-shadow: var(--shadow-elevated);
+  }
+  .toast.err { border-color: var(--red); color: var(--red); background: #fef4f6 }
+  .toast.ok  { border-color: var(--green); color: var(--green); background: #f1faf4 }
+  .toast.warn{ border-color: #b45309; color: #b45309; background: #fffbeb }
+  .toast.info{ border-color: #1e40af; color: #1e40af; background: #eff6ff }
+  @keyframes toastIn {
+    from { transform: translateX(120%); opacity:0 }
+    to { transform: translateX(0); opacity:1 }
+  }
+
+  /* === STAGGERED REVEAL (on load) === */
+  @keyframes revealUp {
+    from { opacity:0; transform:translateY(16px) }
+    to { opacity:1; transform:translateY(0) }
+  }
+  .reveal { animation: revealUp 600ms var(--ease-out) both }
+  .reveal-1 { animation-delay: 60ms }
+  .reveal-2 { animation-delay: 120ms }
+  .reveal-3 { animation-delay: 200ms }
+  .reveal-4 { animation-delay: 280ms }
+  .reveal-5 { animation-delay: 360ms }
+
+  /* ============================================================
+     === NEW LAYOUT: TABBED SIDEBAR + COMPACT DASH ===
+     ============================================================ */
+
+  /* === SIDEBAR PANEL with TABS === */
+  aside { position: sticky; top: 24px; align-self: start; }
+  .sb-panel {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-card);
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100vh - 48px);
+    overflow: hidden;
+  }
+  .sb-tabs {
+    display: flex;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 6px 6px 0;
+    gap: 2px;
+  }
+  .sb-tab {
+    flex: 1;
+    padding: 11px 8px;
+    background: transparent; border: none;
+    font-family: var(--font-sans);
+    font-size: 12.5px; font-weight: 600;
+    color: var(--text-dim); cursor: pointer;
+    border-radius: 10px 10px 0 0;
+    transition: all 150ms var(--ease-out);
+    position: relative;
+    border: 1px solid transparent;
+    border-bottom: none;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .sb-tab:hover { color: var(--text-bright); background: rgba(230,169,29,0.10) }
+  .sb-tab.active {
+    color: var(--accent);
+    background: var(--bg-raised);
+    border-color: var(--border-subtle);
+  }
+  .sb-tab.active::after {
+    content: '';
+    position: absolute; left:0; right:0; bottom:-1px; height:2px;
+    background: var(--bg-raised);
+  }
+  .sb-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 20px 10px;
+    scrollbar-gutter: stable;
+  }
+  .sb-pane { display: none }
+  .sb-pane.active { display: block; animation: paneIn 220ms var(--ease-out) both }
+  @keyframes paneIn {
+    from { opacity:0; transform: translateY(6px) }
+    to   { opacity:1; transform: translateY(0) }
+  }
+  .sb-footer {
+    border-top: 1px solid var(--border-subtle);
+    padding: 14px 18px;
+    background: linear-gradient(180deg, var(--bg-raised), var(--bg-surface));
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .sb-footer .btn-group { gap: 8px }
+  .sb-footer .btn { flex: 1; justify-content: center; }
+  .sb-footer .btn-ghost.btn-sm { flex: 0 1 auto; padding: 8px 12px; }
+  /* Hide action footer on LLM tab — only show in task config context */
+  .sb-panel[data-active="llm"] .sb-footer { display: none }
+
+  /* === PLATFORM CARDS (improved) === */
+  .pf-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  }
+  .pf-card {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 10px 10px 12px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs);
+    cursor: pointer; user-select: none;
+    transition: all 140ms var(--ease-out);
+    position: relative;
+  }
+  .pf-card:hover { border-color: var(--accent); transform: translateY(-1px) }
+  .pf-card .pf-check {
+    position: absolute; opacity: 0; pointer-events: none;
+  }
+  .pf-card .pf-color {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--pf-c, var(--accent));
+    box-shadow: 0 0 0 0 transparent;
+    transition: box-shadow 160ms var(--ease-out), transform 160ms var(--ease-out);
+    flex: 0 0 10px;
+  }
+  .pf-card .pf-name {
+    flex: 1 1 auto; font-size: 12.5px; font-weight: 500;
+    color: var(--text-muted);
+    transition: color 140ms var(--ease-out);
+  }
+  .pf-card .pf-lim {
+    width: 56px; flex: 0 0 56px;
+    font-size: 11.5px; padding: 5px 6px; text-align: center;
+    background: var(--bg-raised); border: 1px solid var(--border-subtle);
+    border-radius: 6px; color: var(--text-body);
+    opacity: 0.4; pointer-events: none;
+    transition: opacity 140ms var(--ease-out);
+  }
+  /* Selected state */
+  .pf-card:has(.pf-check:checked) {
+    background: var(--accent-glow2);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset;
+  }
+  .pf-card:has(.pf-check:checked) .pf-color {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--pf-c) 22%, transparent);
+    transform: scale(1.15);
+  }
+  .pf-card:has(.pf-check:checked) .pf-name {
+    color: var(--text-bright); font-weight: 600;
+  }
+  .pf-card:has(.pf-check:checked) .pf-lim {
+    opacity: 1; pointer-events: auto;
+    border-color: var(--accent);
+  }
+
+  /* === APPLY RATE === */
+  .rate-group {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+  }
+  .rate-opt { cursor: pointer; user-select: none }
+  .rate-opt input { position: absolute; opacity: 0; pointer-events: none }
+  .rate-opt > span {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 8px 4px; font-size: 11.5px; font-weight: 600;
+    color: var(--text-muted);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs);
+    transition: all 130ms var(--ease-out);
+  }
+  .rate-opt > span em {
+    font-style: normal; font-size: 9.5px; font-weight: 500;
+    color: var(--text-dim); font-family: var(--font-mono);
+  }
+  .rate-opt:hover > span { border-color: var(--accent); color: var(--text-body) }
+  .rate-opt input:checked + span {
+    background: var(--accent-glow2);
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset;
+  }
+  .rate-opt input:checked + span em { color: var(--accent) }
+
+  /* === DASHBOARD STRIP (KPIs + Platform Progress combined) === */
+  .dash-strip {
+    display: grid;
+    grid-template-columns: minmax(280px, 1fr) minmax(0, 2.2fr);
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+  .kpi-block {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    box-shadow: var(--shadow-card);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 18px;
+    position: relative;
+    overflow: hidden;
+  }
+  .kpi-block::before {
+    content:''; position:absolute; left:0; top:0; bottom:0; width:3px;
+    background: linear-gradient(180deg, var(--accent), var(--hi));
+  }
+  .kpi-cell {
+    display: flex; flex-direction: column; gap: 2px;
+    padding-left: 4px;
+  }
+  .kpi-val {
+    font-family: var(--font-display);
+    font-size: 22px; font-weight: 700;
+    color: var(--text-bright); letter-spacing: -0.8px; line-height: 1.05;
+  }
+  .kpi-lbl {
+    font-size: 10.5px; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600;
+    font-family: var(--font-sans);
+  }
+  .pl-block {
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    box-shadow: var(--shadow-card);
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    min-width: 0;
+  }
+  .pl-tile {
+    display: flex; flex-direction: column; gap: 5px;
+    padding: 8px 10px;
+    border-radius: var(--radius-xs);
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-base);
+    transition: all 200ms var(--ease-out);
+    position: relative;
+    overflow: hidden;
+  }
+  .pl-tile:hover { border-color: var(--border-base) }
+  .pl-tile-head { display:flex; justify-content:space-between; align-items:center; gap: 6px }
+  .pl-tile-name { font-size: 12px; font-weight: 600; color: var(--text-main); white-space: nowrap }
+  .pl-tile-badge {
+    font-family: var(--font-mono); font-size: 9px; font-weight: 600;
+    letter-spacing: 0.6px; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 8px;
+    background: var(--bg-surface); color: var(--text-dim);
+    border: 1px solid var(--border-subtle);
+  }
+  .pl-tile-count {
+    font-family: var(--font-mono); font-size: 22px; font-weight: 600;
+    color: var(--text-bright); letter-spacing: -1px; line-height: 1;
+  }
+  .pl-tile-bar {
+    height: 3px; border-radius: 2px;
+    background: var(--border-subtle); margin-top: 4px;
+    overflow: hidden;
+  }
+  .pl-tile[data-status="running"] .pl-tile-badge { color: var(--accent); border-color: var(--accent); background: var(--accent-glow2) }
+  .pl-tile[data-status="running"] .pl-tile-bar  { background: linear-gradient(90deg, var(--accent), var(--hi)); animation: shimmer 1.6s ease-in-out infinite }
+  .pl-tile[data-status="done"] .pl-tile-badge { color: var(--green); border-color: var(--green); background: var(--green-glow) }
+  .pl-tile[data-status="done"] .pl-tile-bar  { background: var(--green) }
+  .pl-tile[data-status="error"] .pl-tile-badge { color: var(--red); border-color: var(--red); background: rgba(216,52,78,0.10) }
+  .pl-tile[data-status="error"] .pl-tile-bar  { background: var(--red) }
+
+  /* === LOG PANEL === */
+  .log-panel { padding: 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); margin-bottom: 12px !important }
+  .log-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 16px; cursor: pointer; user-select: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 200ms;
+  }
+  .log-panel.open .log-head { border-bottom-color: var(--border-subtle) }
+  .log-title { font-family: var(--font-display); font-size: 14px; font-weight: 600; color: var(--text-bright) }
+  .log-count {
+    font-family: var(--font-mono); font-size: 11px; color: var(--accent);
+    background: var(--accent-glow2); padding: 1px 8px; border-radius: 99px;
+  }
+  .log-toggle { font-size: 12px; color: var(--text-muted); transition: transform 200ms }
+  .log-panel.open .log-toggle { transform: rotate(180deg) }
+  .log-body {
+    max-height: 0; overflow: hidden; transition: max-height 300ms ease;
+    font-family: var(--font-mono); font-size: 12px; line-height: 1.7;
+    color: var(--text-body); padding: 0 16px;
+  }
+  .log-panel.open .log-body { max-height: 280px; overflow-y: auto; padding: 10px 16px }
+  .log-line { white-space: pre-wrap; word-break: break-all; border-bottom: 1px solid var(--border); padding: 2px 0 }
+  .log-line.log-ok { color: var(--green) }
+  .log-line.log-skip { color: var(--text-muted) }
+  .log-line.log-fail { color: var(--red) }
+  .log-line.log-info { color: var(--accent) }
+
+  /* === RESULTS PANEL (revised) === */
+  .results-panel { padding: 20px 22px 22px; }
+  .results-head {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .results-title {
+    font-family: var(--font-display);
+    font-size: 18px; font-weight: 700;
+    color: var(--text-bright); letter-spacing: -0.4px;
+  }
+  .results-count {
+    font-family: var(--font-mono); font-size: 13px;
+    color: var(--text-dim); font-weight: 500;
+  }
+  .results-count strong { color: var(--accent); font-weight: 700 }
+  .results-pills { display:flex; gap: 6px; margin-left: auto }
+
+  /* === History dropdown in results head === */
+  .hist-wrap { position: relative; margin-left: 8px }
+  .hist-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; font-size: 12px; font-weight: 600;
+    background: var(--bg-surface); color: var(--text-body);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs); cursor: pointer;
+    transition: all .15s; font-family: inherit;
+  }
+  .hist-btn:hover { border-color: var(--accent); color: var(--accent) }
+  .hist-pop {
+    position: absolute; right: 0; top: calc(100% + 6px);
+    width: 380px; max-height: 70vh; overflow-y: auto;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-elevated);
+    z-index: 50; padding: 10px;
+    display: none;
+  }
+  .hist-pop.open { display: block }
+  .hist-pop-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px; padding: 0 4px;
+  }
+  .hist-card {
+    padding: 10px 12px; background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-xs); cursor: pointer;
+    transition: border-color .15s; margin-bottom: 6px;
+  }
+  .hist-card:hover { border-color: var(--accent) }
+  .hist-card:last-child { margin-bottom: 0 }
+  .table-shell .tbl tbody td { padding: 13px 16px; font-size: 13.5px }
+
+  /* === RESPONSIVE for new layout === */
+  @media (max-width: 1280px) {
+    .dash-strip { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 1150px) {
+    aside { position: static; max-height: none }
+    .sb-panel { max-height: none }
+    .pl-block { grid-template-columns: repeat(2, 1fr) }
+  }
+  @media (max-width: 640px) {
+    .kpi-block { grid-template-columns: 1fr 1fr }
+    .pl-block { grid-template-columns: repeat(2, 1fr) }
+  }
+
+  /* ========== 顶层视图切换 Tab ========== */
+  .view-tabs {
+    display: inline-flex; position: relative; gap: 2px;
+    margin: 0 0 16px;
+    padding: 4px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 10px;
+  }
+  .view-tab {
+    position: relative; z-index: 1;
+    padding: 8px 18px; font-size: 13px; font-weight: 600;
+    color: var(--text-muted);
+    background: transparent; border: 0; border-radius: 7px;
+    cursor: pointer;
+    transition: color .22s ease;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: inherit;
+  }
+  .view-tab:hover { color: var(--text-body); }
+  .view-tab .vt-count {
+    font-size: 10.5px; font-weight: 500;
+    padding: 1px 6px; border-radius: 999px;
+    background: rgba(26,24,20,.06); color: var(--text-muted);
+    font-family: var(--font-mono, monospace);
+  }
+  .view-tab.active { color: var(--text-bright); }
+  .view-tab.active .vt-count {
+    background: var(--hi-glow);
+    color: var(--accent);
+  }
+  .view-tab-pill {
+    position: absolute; top: 4px; bottom: 4px; left: 4px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: 7px;
+    transition: transform .28s cubic-bezier(.4,.2,.2,1),
+                width .28s cubic-bezier(.4,.2,.2,1);
+    z-index: 0;
+    box-shadow: 0 1px 0 rgba(255,255,255,.04) inset,
+                0 0 0 1px rgba(230,169,29,.30);
+  }
+  .main-view[hidden] { display: none !important; }
+
+  /* ========== 公开岗位面板 ========== */
+  .pj-head {
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border-subtle);
+  }
+  .pj-head-row {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .pj-head .pj-meta { font-size: 11.5px; color: var(--text-muted) }
+  .pj-head .pj-meta strong { color: var(--text-body) }
+  .pj-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+  .pj-controls .pj-actions { margin-left: auto; display: inline-flex; gap: 8px; align-items: center }
+
+  /* === 工具栏控件统一规格 === */
+  /* 高度 / 字号 / 字重 / 颜色 / 边框 / 圆角 — 三个筛选器（行业 select、城市 combo、学历 chip）一致 */
+  .pj-controls input, .pj-controls select,
+  .pj-controls .city-combo-trigger,
+  .pj-controls .pj-chip-btn {
+    height: 30px; box-sizing: border-box;
+    padding: 0 10px; font: 500 12.5px/1 var(--font-sans);
+    color: var(--text-main);
+    background: var(--bg-raised); border: 1px solid var(--border-base);
+    border-radius: var(--radius-sm);
+    transition: border-color 120ms var(--ease-out), box-shadow 120ms var(--ease-out);
+  }
+  .pj-controls select {
+    appearance: none; -webkit-appearance: none;
+    padding-right: 28px; cursor: pointer;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%236f6857' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+    background-repeat: no-repeat; background-position: right 10px center;
+  }
+  .pj-controls select:hover,
+  .pj-controls .city-combo-trigger:hover,
+  .pj-controls .pj-chip-btn:hover { border-color: var(--border-hover) }
+  .pj-controls select:focus {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--hi-glow);
+  }
+  /* city-combo 在 pj-controls 内与其它控件对齐 — 高度/边框/圆角全继承上面的统一规则 */
+  .pj-controls .city-combo { display: inline-flex; position: relative }
+  .pj-controls .city-combo-trigger {
+    min-height: 30px; padding: 0 10px;
+    display: inline-flex; align-items: center; gap: 8px;
+    white-space: nowrap; cursor: pointer;
+  }
+  .pj-controls .city-combo.open .city-combo-trigger {
+    border-color: var(--accent); box-shadow: 0 0 0 3px var(--hi-glow);
+  }
+  .pj-controls .city-combo.open .pj-chip-caret { transform: rotate(180deg) }
+  .pj-controls .city-combo-pop { min-width: 280px; max-height: 280px }
+  /* 城市级联弹层覆盖：比省份/城市两栏更宽，且高一些 */
+  .pj-controls .pj-cascade-pop,
+  .pj-controls .city-combo-pop.pj-cascade-pop {
+    min-width: 520px; max-width: 640px; max-height: 360px; padding: 6px;
+    right: auto; /* 解除两端拉伸，让 min/max-width 生效 */
+  }
+  .pj-controls .city-tag { padding: 2px 7px; font-size: 11px }
+  .pj-controls .city-placeholder { color: var(--text-muted); font-weight: 500 }
+  .pj-controls .city-caret { color: var(--text-dim); font-size: 10px }
+  /* chip-button 内部排版：与 select / city-trigger 共享外壳尺寸（高度/边框/圆角在 .pj-controls 统一规则里） */
+  .pj-chip-btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    /* 与 select / city-trigger 的 caret 边距对齐：左 10px 右 10px */
+    padding: 0 10px; cursor: pointer; white-space: nowrap;
+  }
+  .pj-chip-count {
+    font: 600 10.5px/1.6 var(--font-mono);
+    padding: 1px 7px; color: var(--hi-deep);
+    background: var(--hi-bg); border-radius: 999px;
+  }
+  .pj-chip-count.empty {
+    color: var(--text-muted); background: var(--bg-surface); font-weight: 500;
+  }
+  .pj-chip-caret { color: var(--text-dim); font-size: 10px; transition: transform .15s }
+  .pj-edu-wrap.open .pj-chip-btn, .pj-jobs-wrap.open > .pj-chip-btn {
+    border-color: var(--accent); box-shadow: 0 0 0 3px var(--hi-glow);
+  }
+  .pj-edu-wrap.open .pj-chip-caret, .pj-jobs-wrap.open .pj-chip-caret { transform: rotate(180deg) }
+
+  /* 行业 → 岗位 多选弹层 */
+  .pj-jobs-wrap, .pj-edu-wrap { position: relative }
+  .pj-jobs-wrap .btn { height: 28px; padding: 0 10px; font-size: 12px; border-radius: var(--radius-sm) }
+  .pj-chip-pop {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 80;
+    background: var(--bg-raised); border: 1px solid var(--border-base);
+    border-radius: var(--radius-sm); box-shadow: var(--shadow-elevated);
+    padding: 8px; min-width: 200px;
+    display: none;
+    animation: paneIn 160ms var(--ease-out) both;
+  }
+  .pj-edu-wrap.open .pj-chip-pop { display: block }
+  .pj-edu-list { display: flex; flex-direction: column; gap: 2px; padding: 2px; min-width: 160px }
+  .pj-edu-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 10px; border-radius: var(--radius-xs);
+    font-size: 12.5px; color: var(--text-body); cursor: pointer;
+    user-select: none;
+  }
+  .pj-edu-row:hover { background: var(--bg-surface) }
+  .pj-edu-row.active { background: var(--hi-bg); color: var(--text-bright); font-weight: 600 }
+  .pj-edu-check {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; border-radius: 3px;
+    border: 1px solid var(--border-hover); color: var(--hi-deep);
+    font-size: 11px; line-height: 1; flex-shrink: 0;
+  }
+  .pj-edu-row.active .pj-edu-check {
+    background: var(--hi); border-color: var(--hi-deep); color: var(--bg-stamp);
+  }
+  .pj-jobs-wrap.disabled #pjJobsBtn { opacity: 0.5; cursor: not-allowed }
+  .pj-jobs-pop {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 80;
+    background: var(--bg-raised); border: 1px solid var(--border-subtle);
+    border-radius: 8px; box-shadow: var(--shadow-elevated);
+    padding: 8px; min-width: 320px; max-width: 380px;
+    display: none;
+  }
+  .pj-cascade-pop { min-width: 520px; max-width: 640px; padding: 6px }
+  .pj-cascade { display: grid; grid-template-columns: 180px 1fr; gap: 6px; }
+  .pj-cascade-left, .pj-cascade-right { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .pj-cascade-left { border-right: 1px solid var(--border-subtle); padding-right: 6px; }
+  .pj-industry-list {
+    list-style: none; margin: 0; padding: 4px;
+    max-height: 260px; overflow-y: auto;
+    background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 6px;
+  }
+  .pj-industry-list li {
+    padding: 5px 8px; font-size: 12px; cursor: pointer;
+    border-radius: 4px; color: var(--text-body);
+    display: flex; align-items: center; justify-content: space-between; gap: 6px;
+    transition: background 0.1s;
+  }
+  .pj-industry-list li:hover { background: var(--bg-raised) }
+  .pj-industry-list li.active {
+    background: var(--hi-bg); color: var(--text-bright);
+    font-weight: 500;
+  }
+  .pj-industry-list li.hidden { display: none }
+  .pj-industry-list .ind-count {
+    font-size: 10.5px; color: var(--text-muted);
+    background: var(--bg-raised); border: 1px solid var(--border-subtle);
+    border-radius: 10px; padding: 1px 6px; min-width: 18px; text-align: center;
+  }
+  .pj-industry-list li.active .ind-count {
+    background: var(--hi-deep); border-color: var(--hi-deep); color: var(--bg-stamp);
+  }
+  .pj-jobs-wrap.open .pj-jobs-pop { display: block }
+  .pj-jobs-search {
+    width: 100%; box-sizing: border-box;
+    padding: 5px 8px; margin-bottom: 6px;
+    font-size: 12px; color: var(--text-body);
+    background: var(--bg-surface); border: 1px solid var(--border-subtle);
+    border-radius: 6px; outline: none;
+  }
+  .pj-jobs-search:focus { border-color: var(--accent) }
+  .pj-jobs-list {
+    display: flex; flex-wrap: wrap; gap: 4px;
+    max-height: 220px; overflow-y: auto;
+    padding: 4px; background: var(--bg-surface);
+    border: 1px solid var(--border-subtle); border-radius: 6px;
+  }
+  .pj-jobs-list .pj-job-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 5px 10px; font-size: 12px;
+    background: var(--bg-raised); border: 1px solid var(--border-subtle);
+    border-radius: 12px; color: var(--text-body); cursor: pointer;
+    user-select: none;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .pj-jobs-list .pj-job-pill:hover { border-color: var(--accent) }
+  .pj-jobs-list .pj-job-pill.active {
+    background: var(--hi-bg); border-color: var(--hi-deep); color: var(--text-bright);
+  }
+  .pj-jobs-list .pj-job-pill.hidden { display: none }
+  .pj-jobs-list .pj-job-pill input { display: none }
+  .pj-jobs-bar {
+    display: flex; align-items: center; gap: 6px;
+    margin-top: 8px; padding-top: 6px;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .pj-jobs-hint { color: var(--text-muted); font-size: 11px; margin-left: auto }
+  .pj-sources {
+    display: grid; grid-template-columns: 64px 1fr; gap: 10px;
+    padding: 10px 16px; border-bottom: 1px solid var(--border-subtle);
+    align-items: center;
+  }
+  .pj-sources-label {
+    writing-mode: vertical-rl;
+    text-align: center; font-size: 11.5px; color: var(--text-muted);
+    line-height: 1.5; letter-spacing: 2px;
+  }
+  .pj-sources-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr));
+    gap: 8px;
+  }
+  .pj-src {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-radius: 8px;
+    background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  }
+  .pj-src:hover { border-color: var(--accent) }
+  .pj-src.disabled { opacity: 0.55 }
+  .pj-src-logo {
+    width: 30px; height: 30px; flex-shrink: 0;
+    border-radius: 6px; display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: #fff;
+  }
+  .pj-src-body { flex: 1; min-width: 0; line-height: 1.25 }
+  .pj-src-name { font-size: 12.5px; font-weight: 600; color: var(--text-bright) }
+  .pj-src-sub  { font-size: 10.5px; color: var(--text-muted); margin-top: 2px }
+  .pj-src-status {
+    display: inline-block; margin-top: 4px;
+    font-size: 10.5px; font-weight: 600;
+    padding: 1px 7px; border-radius: 999px;
+    font-family: var(--font-mono, monospace);
+  }
+  .pj-src-status.ok   { background: rgba(46,125,79,.14);   color: var(--green) }
+  .pj-src-status.zero { background: rgba(158,150,132,.14); color: var(--text-muted) }
+  .pj-src-status.err  { background: rgba(168,40,29,.14);   color: var(--red); cursor: help }
+  .pj-src-skip { margin-left: 4px; color: var(--red); cursor: help; opacity: .85 }
+  /* iOS-风格小开关 */
+  .pj-toggle { position: relative; width: 32px; height: 18px; flex-shrink: 0 }
+  .pj-toggle input { opacity: 0; width: 0; height: 0 }
+  .pj-toggle .knob {
+    position: absolute; inset: 0; border-radius: 999px;
+    background: rgba(120,120,120,0.35); cursor: pointer; transition: 150ms;
+  }
+  .pj-toggle .knob::before {
+    position: absolute; content: ""; left: 2px; top: 2px;
+    width: 14px; height: 14px; background: #fff; border-radius: 50%;
+    transition: 150ms;
+  }
+  .pj-toggle input:checked + .knob { background: var(--hi) }
+  .pj-toggle input:checked + .knob::before { transform: translateX(14px) }
+  /* "✨ LLM 富化" 顶栏开关：和按钮同行，靠诊断按钮右侧留 1em */
+  .pj-enrich-toggle {
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-left: 1em;
+    font-size: 11.5px; color: var(--text-muted); cursor: pointer;
+    user-select: none; white-space: nowrap;
+  }
+  .pj-enrich-toggle input { accent-color: var(--hi); cursor: pointer; margin: 0 }
+  .pj-enrich-toggle input:checked + span { color: var(--text-base) }
+  .pj-hint-mini {
+    font-size: 10.5px; color: var(--text-muted); opacity: .72;
+    margin-left: 4px; white-space: nowrap; pointer-events: none;
+  }
+  .pj-hint-mini.hidden { display: none }
+  .pj-table-wrap { padding: 0 16px 16px }
+  table.pj-table {
+    width: 100%; border-collapse: separate; border-spacing: 0;
+    font-size: 12px;
+  }
+  table.pj-table th, table.pj-table td {
+    padding: 9px 10px; text-align: left; vertical-align: middle;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  table.pj-table thead th {
+    position: sticky; top: 0; z-index: 1;
+    background: var(--bg-surface);
+    font-size: 11.5px; color: var(--text-muted); font-weight: 500;
+  }
+  table.pj-table tbody tr:hover td { background: rgba(230,169,29,0.08) }
+
+  /* === 分页器 === */
+  .pj-pager {
+    display: flex; align-items: center; justify-content: flex-end;
+    gap: 4px; padding: 10px 16px 4px;
+    font-size: 12px; color: var(--text-muted);
+  }
+  .pj-pager .pj-page-info {
+    margin-right: 10px; font-family: var(--font-mono);
+    font-size: 11.5px; color: var(--text-dim);
+  }
+  .pj-page-btn {
+    min-width: 28px; height: 26px; padding: 0 8px;
+    background: var(--bg-raised); border: 1px solid var(--border-base);
+    border-radius: var(--radius-sm); color: var(--text-body);
+    font: 500 12px/1 var(--font-sans); cursor: pointer;
+    transition: border-color 120ms var(--ease-out), background 120ms var(--ease-out);
+  }
+  .pj-page-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--text-bright) }
+  .pj-page-btn:disabled { opacity: .45; cursor: not-allowed }
+  .pj-page-btn.active {
+    background: var(--accent); border-color: var(--accent);
+    color: var(--hi); font-weight: 700;
+  }
+  .pj-page-sep { padding: 0 4px; color: var(--text-muted) }
+  table.pj-table .pj-title { font-weight: 600; color: var(--text-bright) }
+  table.pj-table .pj-company { color: var(--text-body) }
+  table.pj-table .col-link { width: 40px; text-align: center }
+  table.pj-table .col-src { width: 90px; color: var(--text-muted) }
+  table.pj-table .col-loc { width: 110px }
+  table.pj-table .col-edu { width: 60px }
+  table.pj-table .col-time { width: 110px; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px }
+  /* LLM 补全字段：极细的左侧色条，提示"非平台原始字段，已由模型推断" */
+  table.pj-table td.pj-field-llm {
+    position: relative;
+    color: var(--accent);
+    background: var(--accent-glow2, rgba(140, 100, 255, 0.06));
+  }
+  table.pj-table td.pj-field-llm::before {
+    content: ''; position: absolute; left: 0; top: 4px; bottom: 4px; width: 2px;
+    background: var(--accent); border-radius: 1px; opacity: 0.65;
+  }
+  table.pj-table .col-applied { width: 56px; text-align: center }
+  table.pj-table .col-score { width: 80px; text-align: center }
+  table.pj-table th.col-score.sortable { cursor: pointer; user-select: none }
+  table.pj-table th.col-score.sortable:hover { color: var(--accent) }
+  table.pj-table th.col-score.sort-on { color: var(--accent) }
+  table.pj-table th.col-score.sort-on::after { content: ' ↓'; font-size: 10px }
+  table.pj-table .col-corp { width: 88px; text-align: center }
+  .pj-corp-tag {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 11px; font-weight: 600; line-height: 1.4; white-space: nowrap;
+  }
+  .pj-corp-tag.soe     { background: color-mix(in srgb, #b91c1c 18%, var(--bg-surface)); color: #b91c1c; border: 1px solid #b91c1c44 }
+  .pj-corp-tag.private { background: color-mix(in srgb, #0ea5e9 18%, var(--bg-surface)); color: #0369a1; border: 1px solid #0ea5e944 }
+  .pj-corp-tag.gov     { background: color-mix(in srgb, #7c3aed 18%, var(--bg-surface)); color: #6d28d9; border: 1px solid #7c3aed44 }
+  .pj-corp-tag.unknown { color: var(--text-muted); font-weight: 400 }
+  table.pj-table td.pj-deadline { color: var(--hi-deep); font-weight: 600 }
+  /* LLM 补全后的字段加底纹标识 */
+  table.pj-table td.pj-enriched {
+    background: linear-gradient(180deg, transparent 60%, color-mix(in srgb, var(--accent) 14%, transparent) 100%);
+    position: relative;
+  }
+  /* 匹配分徽章 */
+  .pj-score-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 700;
+    font-family: var(--font-mono); min-width: 36px; justify-content: center;
+  }
+  .pj-score-pill.high   { background: color-mix(in srgb, #15803d 22%, var(--bg-surface)); color: #15803d; border: 1px solid #15803d44 }
+  .pj-score-pill.mid    { background: color-mix(in srgb, #ca8a04 22%, var(--bg-surface)); color: #b45309; border: 1px solid #ca8a0444 }
+  .pj-score-pill.low    { background: color-mix(in srgb, #b91c1c 18%, var(--bg-surface)); color: #b91c1c; border: 1px solid #b91c1c44 }
+  .pj-score-pill.none   { color: var(--text-muted); font-size: 16px }
+  .pj-score-reason {
+    font-size: 10px; color: var(--text-muted); margin-top: 2px;
+    line-height: 1.2; max-width: 90px; word-wrap: break-word;
+  }
+  /* 偏好编辑弹层 */
+  .pj-prefs-modal-mask {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+    display: none; align-items: center; justify-content: center;
+    z-index: 9999;
+  }
+  .pj-prefs-modal-mask.open { display: flex }
+  .pj-prefs-modal {
+    background: var(--bg-raised); border: 1px solid var(--border-strong);
+    border-radius: 12px; padding: 24px; width: 90%; max-width: 560px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  }
+  .pj-prefs-modal h3 {
+    margin: 0 0 8px; color: var(--text-bright); font-size: 16px;
+    font-family: var(--font-sans);
+  }
+  .pj-prefs-modal .hint {
+    color: var(--text-muted); font-size: 12px; line-height: 1.6;
+    margin-bottom: 12px;
+  }
+  .pj-prefs-modal textarea {
+    width: 100%; min-height: 140px; padding: 12px;
+    background: var(--bg-surface); border: 1px solid var(--border-subtle);
+    border-radius: 8px; color: var(--text-main);
+    font-family: var(--font-sans); font-size: 13px; line-height: 1.55;
+    resize: vertical; box-sizing: border-box;
+  }
+  .pj-prefs-modal textarea:focus { border-color: var(--accent); outline: 0 }
+  .pj-prefs-actions {
+    display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px;
+  }
+  .pj-prefs-example {
+    background: var(--bg-surface); border: 1px dashed var(--border-subtle);
+    border-radius: 6px; padding: 8px 10px; font-size: 11px;
+    color: var(--text-muted); line-height: 1.55; margin-top: 8px;
+  }
+  /* 已投递标记按钮 */
+  .pj-applied-btn {
+    cursor: pointer; user-select: none;
+    width: 24px; height: 24px; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border-subtle); background: var(--bg-surface);
+    color: var(--text-muted); font-size: 13px; transition: all .15s;
+  }
+  .pj-applied-btn:hover { border-color: var(--accent); color: var(--accent) }
+  .pj-applied-btn.on {
+    background: var(--accent); border-color: var(--accent); color: var(--bg-root);
+    font-weight: 700;
+  }
+  tr.pj-row-applied td:not(.col-applied) { opacity: 0.45 }
+  tr.pj-row-applied td.pj-title, tr.pj-row-applied td.pj-company { text-decoration: line-through }
+  table.pj-table a.go-link {
+    color: var(--accent); text-decoration: none; font-weight: 700;
+  }
+  table.pj-table a.go-link:hover { text-decoration: underline }
+  .pj-empty-row td {
+    padding: 30px 16px; text-align: center;
+    color: var(--text-muted); font-size: 12px;
+  }
+
+</style>
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- HEADER -->
+  <header class="header reveal reveal-1">
+    <div class="brand">
+      <div class="brand-mark">🕷</div>
+      <div class="brand-text">
+        <h1>Job<span>Spider</span></h1>
+        <div class="tagline">Multi‑Agent Auto Apply &middot; 多智能体自动投递系统</div>
+      </div>
+    </div>
+    <div class="sys-status">
+      <div class="theme-switch" id="themeSwitch" title="切换主题">
+        <span class="theme-swatch" data-key="bulletin" title="编辑公报（米黄+墨黑）"></span>
+        <span class="theme-swatch" data-key="terminal" title="深色控制台 / Terminal"></span>
+        <span class="theme-swatch" data-key="minimal" title="现代极简（白底+紫）"></span>
+        <span class="theme-swatch" data-key="dusk" title="暖暮深咖"></span>
+        <span class="theme-swatch" data-key="azure" title="冷静学术蓝"></span>
+      </div>
+      <div class="pulse" id="statusDot"></div>
+      <span id="statusLabel">就绪</span>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <div class="layout">
+    <!-- SIDEBAR (Tabbed) -->
+    <aside class="reveal reveal-2">
+      <div class="sb-panel">
+        <!-- TAB NAV -->
+        <nav class="sb-tabs" role="tablist">
+          <button class="sb-tab active" data-tab="task" onclick="switchTab('task')">🎯 搜索投递</button>
+          <button class="sb-tab" data-tab="llm" onclick="switchTab('llm')">🤖 LLM <span id="llmStatusDot" style="display:none;width:6px;height:6px;border-radius:50%;background:var(--green);margin-left:2px"></span></button>
+        </nav>
+
+        <!-- TAB BODY (scrollable) -->
+        <div class="sb-body">
+
+          <!-- ===== TAB: 搜索投递（搜索 + 投递条件 合并） ===== -->
+          <div class="sb-pane active" data-pane="task">
+            <!-- 模式切换：行业多选 / 自定义关键词 -->
+            <div class="field">
+              <label class="field-hint">投递目标</label>
+              <div class="chip-group" style="margin-bottom:10px">
+                <div class="chip">
+                  <input type="radio" name="modeSel" id="modeIndustry" value="industry" checked>
+                  <label for="modeIndustry">📁 行业 · 多选岗位</label>
+                </div>
+                <div class="chip">
+                  <input type="radio" name="modeSel" id="modeKw" value="kw">
+                  <label for="modeKw">✏ 自定义关键词</label>
+                </div>
+              </div>
+            </div>
+
+            <!-- 行业模式 -->
+            <div id="industryMode">
+              <div class="field">
+                <label class="field-hint">行业大类</label>
+                <select class="select" id="industrySel" onchange="onIndustryChange()">
+                  <option value="">请选择行业</option>
+                </select>
+              </div>
+              <div class="field" id="jobsField" style="display:none">
+                <label class="field-hint">
+                  选择岗位 <span style="font-weight:400;color:var(--text-muted)" id="jobsHint">(可多选)</span>
+                </label>
+                <div id="jobsList" style="display:flex;flex-wrap:wrap;gap:6px;max-height:200px;overflow-y:auto;
+                                           padding:8px;background:var(--bg-surface);border:1px solid var(--border-subtle);
+                                           border-radius:var(--radius-xs)"></div>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="selectAllJobs(true)">全选</button>
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="selectAllJobs(false)">清空</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 自定义关键词模式 -->
+            <div id="kwMode" style="display:none">
+              <div class="field">
+                <label class="field-hint">关键词</label>
+                <input class="input" id="kw" placeholder="Python开发 · 前端工程师...">
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-hint">
+                城市 <span style="font-weight:400;color:var(--text-muted)">(可多选，留空=全国)</span>
+              </label>
+              <div class="city-combo" id="cityCombo">
+                <div id="citySelected" class="city-combo-trigger" onclick="openCityPanel(event)">
+                  <span class="city-placeholder">点击选择城市（支持搜索）</span>
+                  <span class="city-caret">▾</span>
+                </div>
+                <div id="cityPanel" class="city-combo-pop">
+                  <input class="input" id="citySearch" placeholder="🔍 输入城市名搜索（也可直接浏览下方列表）"
+                         style="font-size:12px" oninput="filterCities()" autocomplete="off">
+                  <div id="cityProvinces" class="city-combo-body"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-hint">薪资范围 <span style="font-weight:400;color:var(--text-muted)">K / 月</span></label>
+              <div class="row-2">
+                <input class="input" id="salMin" placeholder="最低" type="number">
+                <input class="input" id="salMax" placeholder="最高" type="number">
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-hint">经验 · 学历</label>
+              <div class="row-2">
+                <select class="select" id="exp">
+                  <option value="">经验不限</option>
+                  <option value="应届生">应届生</option>
+                  <option value="1-3年">1&ndash;3 年</option>
+                  <option value="3-5年">3&ndash;5 年</option>
+                  <option value="5-10年">5&ndash;10 年</option>
+                  <option value="10年以上">10 年以上</option>
+                </select>
+                <select class="select" id="edu">
+                  <option value="">学历不限</option>
+                  <option value="大专">大专</option><option value="本科">本科</option>
+                  <option value="硕士">硕士</option><option value="博士">博士</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-hint">
+                目标平台 <span style="font-weight:400;color:var(--text-muted)">(点击选中 · 右侧框=投递上限)</span>
+              </label>
+              <div class="pf-grid">
+                <label class="pf-card" data-color="#0d8aa6" for="cbBoss">
+                  <input type="checkbox" id="cbBoss" class="pf-check">
+                  <span class="pf-color" style="--pf-c:#0d8aa6"></span>
+                  <span class="pf-name">Boss 直聘</span>
+                  <input class="pf-lim" id="limBoss" placeholder="∞" type="number" min="0"
+                         onclick="event.preventDefault()" onmousedown="event.stopPropagation()">
+                </label>
+                <label class="pf-card" data-color="#4b59b8" for="cbZl">
+                  <input type="checkbox" id="cbZl" class="pf-check">
+                  <span class="pf-color" style="--pf-c:#4b59b8"></span>
+                  <span class="pf-name">智联招聘</span>
+                  <input class="pf-lim" id="limZl" placeholder="∞" type="number" min="0"
+                         onclick="event.preventDefault()" onmousedown="event.stopPropagation()">
+                </label>
+                <label class="pf-card" data-color="#c46228" for="cb51">
+                  <input type="checkbox" id="cb51" class="pf-check">
+                  <span class="pf-color" style="--pf-c:#c46228"></span>
+                  <span class="pf-name">前程无忧</span>
+                  <input class="pf-lim" id="lim51" placeholder="∞" type="number" min="0"
+                         onclick="event.preventDefault()" onmousedown="event.stopPropagation()">
+                </label>
+                <label class="pf-card" data-color="#0d8a52" for="cbLp">
+                  <input type="checkbox" id="cbLp" class="pf-check">
+                  <span class="pf-color" style="--pf-c:#0d8a52"></span>
+                  <span class="pf-name">猎聘</span>
+                  <input class="pf-lim" id="limLp" placeholder="∞" type="number" min="0"
+                         onclick="event.preventDefault()" onmousedown="event.stopPropagation()">
+                </label>
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-hint">
+                投递速率 <span style="font-weight:400;color:var(--text-muted)">(每条投递之间的间隔)</span>
+              </label>
+              <div class="rate-group">
+                <label class="rate-opt"><input type="radio" name="applyRate" value="slow"><span>🐢 慢<em>8-15s</em></span></label>
+                <label class="rate-opt"><input type="radio" name="applyRate" value="normal" checked><span>🚶 标准<em>4-8s</em></span></label>
+                <label class="rate-opt"><input type="radio" name="applyRate" value="fast"><span>🏃 快<em>2-4s</em></span></label>
+                <label class="rate-opt"><input type="radio" name="applyRate" value="turbo"><span>⚡ 极速<em>1-2s</em></span></label>
+              </div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">
+                速率越快越容易触发风控；建议首次投递选"标准"或"慢"
+              </div>
+            </div>
+
+            <div class="field">
+              <label class="field-hint">
+                投递规则 <span style="font-weight:400;color:var(--text-muted)">(描述不想投递什么 · 需 LLM)</span>
+              </label>
+              <textarea class="input" id="excludeRules" rows="3"
+                        placeholder="例: 不投外包公司；不要需要经常出差的；薪资低于15K的不要"
+                        style="resize:vertical;min-height:72px;font-size:13px;line-height:1.5"></textarea>
+            </div>
+
+            <div class="field">
+              <label class="field-hint">打招呼语模板 <span style="font-weight:400;color:var(--text-muted)">(留空 = LLM 按 JD 生成)</span></label>
+              <textarea class="input" id="greetingTpl" rows="3"
+                        placeholder="留空 = 根据每个岗位JD自动生成个性化打招呼语"
+                        style="resize:vertical;min-height:72px;font-size:13px;line-height:1.5"></textarea>
+            </div>
+          </div>
+
+          <!-- ===== TAB: LLM ===== -->
+          <div class="sb-pane" data-pane="llm">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;
+                        padding:10px 12px;background:var(--bg-surface);border-radius:var(--radius-xs);
+                        border:1px solid var(--border-subtle)">
+              <span style="font-size:12px;color:var(--text-body);font-weight:600">配置状态</span>
+              <span id="llmStatus" style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono)">未配置</span>
+            </div>
+            <div class="field">
+              <label class="field-hint">提供商标识</label>
+              <input class="input" id="llmProvider" placeholder="deepseek / anthropic / openai..."
+                     oninput="onLLMChange()">
+            </div>
+            <div class="field">
+              <label class="field-hint">模型名称</label>
+              <input class="input" id="llmModel" placeholder="deepseek-chat / gpt-4o..."
+                     oninput="onLLMChange()">
+            </div>
+            <div class="field">
+              <label class="field-hint">API Key</label>
+              <input class="input" id="llmKey" type="password" placeholder="sk-..." oninput="onLLMChange()">
+            </div>
+            <div class="field">
+              <label class="field-hint">Base URL <span style="font-weight:400;color:var(--text-muted)">(可选)</span></label>
+              <input class="input" id="llmBase" placeholder="https://api.deepseek.com/v1">
+            </div>
+            <div style="margin-top:14px">
+              <button class="btn btn-primary btn-sm" id="btnSaveConfig" onclick="saveConfigToServer()" style="width:100%">
+                💾 保存到 .env
+              </button>
+              <span id="cfgSaved" style="display:none;font-size:11px;color:var(--green);margin-top:8px;
+                    text-align:center;font-family:var(--font-mono)">已保存 ✓</span>
+            </div>
+          </div>
+
+          <!-- LLM 兼容隐藏占位（旧代码仍引用） -->
+          <div id="llmConfig" style="display:none"></div>
+        </div>
+
+        <!-- STICKY ACTIONS (hidden on LLM tab) -->
+        <div class="sb-footer">
+          <div class="btn-group">
+            <button class="btn btn-primary" id="btnGo" onclick="go()">
+              <span>▶</span> 开始投递
+            </button>
+            <button class="btn btn-danger" id="btnStop" onclick="stopTask()" style="display:none">
+              <span>■</span> 停止
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="reset()">清除</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main>
+
+      <!-- ====== Top-level view switcher ====== -->
+      <nav class="view-tabs" role="tablist" aria-label="主视图切换">
+        <span class="view-tab-pill" id="vtPill" aria-hidden="true"></span>
+        <button type="button" class="view-tab active" role="tab"
+                data-view="apply" aria-selected="true"
+                onclick="switchMainView('apply')">
+          <span>📤 投递任务</span>
+          <span class="vt-count" id="vtApplyCount">0</span>
+        </button>
+        <button type="button" class="view-tab" role="tab"
+                data-view="public" aria-selected="false"
+                onclick="switchMainView('public')">
+          <span>🌐 公开岗位</span>
+          <span class="vt-count" id="vtPublicCount">0</span>
+        </button>
+      </nav>
+
+      <!-- ====== VIEW: 投递任务 ====== -->
+      <div class="main-view" data-view="apply">
+      <!-- DASHBOARD STRIP (KPIs + Platform Progress combined) -->
+      <section class="dash-strip reveal reveal-2">
+        <!-- KPIs: total / applied / avg sal / cities -->
+        <div class="kpi-block">
+          <div class="kpi-cell"><div class="kpi-val" id="sTotal">—</div><div class="kpi-lbl">职位总数</div></div>
+          <div class="kpi-cell"><div class="kpi-val" id="sApplied">—</div><div class="kpi-lbl">已投递</div></div>
+          <div class="kpi-cell"><div class="kpi-val" id="sAvgSal">—</div><div class="kpi-lbl">均薪 K/月</div></div>
+          <div class="kpi-cell"><div class="kpi-val" id="sCities">—</div><div class="kpi-lbl">覆盖城市</div></div>
+        </div>
+        <!-- Platform mini progress tiles -->
+        <div class="pl-block">
+          <div class="pl-tile" data-status="idle" id="pc-boss">
+            <div class="pl-tile-head"><span class="pl-tile-name">Boss 直聘</span><span class="pl-tile-badge">等待</span></div>
+            <div class="pl-tile-count">0</div>
+            <div class="pl-tile-bar"></div>
+          </div>
+          <div class="pl-tile" data-status="idle" id="pc-zhilian">
+            <div class="pl-tile-head"><span class="pl-tile-name">智联招聘</span><span class="pl-tile-badge">等待</span></div>
+            <div class="pl-tile-count">0</div>
+            <div class="pl-tile-bar"></div>
+          </div>
+          <div class="pl-tile" data-status="idle" id="pc-job51">
+            <div class="pl-tile-head"><span class="pl-tile-name">前程无忧</span><span class="pl-tile-badge">等待</span></div>
+            <div class="pl-tile-count">0</div>
+            <div class="pl-tile-bar"></div>
+          </div>
+          <div class="pl-tile" data-status="idle" id="pc-liepin">
+            <div class="pl-tile-head"><span class="pl-tile-name">猎聘</span><span class="pl-tile-badge">等待</span></div>
+            <div class="pl-tile-count">0</div>
+            <div class="pl-tile-bar"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- LOG PANEL -->
+      <div class="panel reveal reveal-3 log-panel" id="logPanel" style="margin-top:0;display:none">
+        <div class="log-head" onclick="toggleLogPanel()">
+          <span class="log-title">实时日志</span>
+          <span class="log-count" id="logCount">0</span>
+          <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();clearLogs()" style="margin-left:auto;font-size:11px">清空</button>
+          <span class="log-toggle" id="logToggle">▾</span>
+        </div>
+        <div class="log-body" id="logBody"></div>
+      </div>
+
+      <!-- RESULTS PANEL -->
+      <div class="panel reveal reveal-4 results-panel" style="margin-top:0">
+        <div class="results-head">
+          <span class="results-title">投递结果</span>
+          <span class="results-count"><strong id="tblCount">0</strong> / <span id="tblTotal">0</span> 条</span>
+          <span id="histBadge" class="stat-pill" style="display:none;color:var(--accent);background:var(--accent-glow2);border-color:var(--accent) !important;cursor:default">
+            📜 历史聚合视图
+          </span>
+          <div class="results-pills">
+            <span class="stat-pill applied">✓ <span id="pillApplied">0</span></span>
+            <span class="stat-pill skipped">⊘ <span id="pillSkipped">0</span></span>
+            <span class="stat-pill failed">✗ <span id="pillFailed">0</span></span>
+          </div>
+          <div class="hist-wrap">
+            <button class="hist-btn" onclick="toggleHistory(event)">📜 历史 <span style="opacity:.6">▾</span></button>
+            <div class="hist-pop" id="historyPop">
+              <div class="hist-pop-head">
+                <span style="font-size:12px;color:var(--text-body);font-weight:600">历史任务</span>
+                <div style="display:flex;gap:6px">
+                  <button class="btn btn-ghost btn-sm" onclick="clearHistory()" style="font-size:11px;color:var(--red)">🗑 清空</button>
+                  <button class="btn btn-ghost btn-sm" onclick="loadHistory()" style="font-size:11px">🔄 刷新</button>
+                </div>
+              </div>
+              <div id="historyList">
+                <div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px 0">
+                  加载中...
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 结果筛选条 -->
+        <div class="filter-bar">
+          <span class="lbl">状态</span>
+          <select id="fStatus" onchange="tblPage=1;renderTbl()">
+            <option value="" selected>全部</option>
+            <option value="applied">已投递</option>
+            <option value="skipped">已跳过</option>
+            <option value="failed">失败</option>
+            <option value="pending">未处理</option>
+          </select>
+          <span class="lbl">平台</span>
+          <select id="fPlatform" onchange="tblPage=1;renderTbl()">
+            <option value="">全部</option>
+            <option value="boss">Boss 直聘</option>
+            <option value="zhilian">智联招聘</option>
+            <option value="job51">前程无忧</option>
+            <option value="liepin">猎聘</option>
+          </select>
+          <span class="lbl">城市</span>
+          <select id="fCity" onchange="tblPage=1;renderTbl()"><option value="">全部</option></select>
+          <span class="lbl">薪资 ≥</span>
+          <input id="fSal" type="number" placeholder="K/月" oninput="tblPage=1;renderTbl()">
+          <span class="lbl">搜索</span>
+          <input id="fKw" placeholder="职位/公司..." oninput="tblPage=1;renderTbl()" style="width:160px">
+          <button class="btn btn-ghost btn-sm" onclick="resetFilters()" style="margin-left:auto">重置筛选</button>
+        </div>
+
+        <div class="table-shell">
+          <table class="tbl">
+            <thead><tr>
+              <th data-sort="job_title">职位名称</th>
+              <th data-sort="company_name">公司</th>
+              <th data-sort="salary_min" style="width:96px">薪资</th>
+              <th data-sort="city" style="width:72px">城市</th>
+              <th data-sort="experience_required" style="width:72px">经验</th>
+              <th data-sort="education_required" style="width:64px">学历</th>
+              <th data-sort="platform_name" style="width:80px">来源</th>
+              <th data-sort="apply_status" style="width:88px">投递状态</th>
+              <th style="width:200px">详情</th>
+              <th style="width:50px">🔗</th>
+            </tr></thead>
+            <tbody id="tblBody">
+              <tr><td colspan="10"><div class="empty"><div class="empty-glyph">&#9679;&#9675;&#9679;</div><div class="empty-text">输入关键词开始投递</div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="tbl-pager" id="tblPager"></div>
+      </div>
+      </div><!-- /main-view apply -->
+
+      <!-- ====== VIEW: 公开岗位 ====== -->
+      <div class="main-view" data-view="public" hidden>
+      <!-- ===== 其他公开岗位平台 ===== -->
+      <div class="panel reveal" style="margin-top:0" id="pjPanel">
+        <div class="pj-head">
+          <div class="pj-head-row">
+            <span class="results-title">🌐 其他公开岗位</span>
+            <span class="pj-meta">
+              共 <strong id="pjTotal">0</strong> 条
+              <span id="pjBreakdown" class="pj-breakdown"></span>
+              · 上次抓取: <span id="pjLastFetch">—</span>
+            </span>
+            <div class="pj-actions" style="margin-left:auto;display:inline-flex;gap:8px;align-items:center">
+              <button class="btn btn-primary btn-sm" id="pjRefreshBtn" onclick="refreshPublicJobs()">🔄 抓取</button>
+              <button class="btn btn-ghost btn-sm" id="pjScoreBtn" onclick="pjScoreVisible(event)" title="按你写的「求职偏好」给岗位打 0-100 分 · 首次点击会让你写偏好 · 按住 Shift 点击可重新编辑偏好">⭐ 匹配评分</button>
+              <button class="btn btn-ghost btn-sm" id="pjDiagBtn" onclick="diagPublicJobs()" title="逐源体检（看每个源是不是真的能连上）">🩺 诊断</button>
+              <label class="pj-enrich-toggle" title="关闭后只抓取标题、不调用 LLM 富化">
+                <input type="checkbox" id="pjEnrichToggle" checked onchange="pjOnEnrichToggleChange()">
+                <span>✨ LLM 富化</span>
+              </label>
+              <span id="pjEnrichCostHint" class="pj-hint-mini">关闭可省 token，仅显示原始字段</span>
+            </div>
+          </div>
+          <div class="pj-controls">
+            <div class="pj-jobs-wrap" id="pjJobsWrap">
+              <button type="button" class="btn btn-ghost btn-sm" id="pjJobsBtn" onclick="pjToggleJobs(event)" title="选择行业 → 选择具体岗位（多选）">
+                <span id="pjIndustryLabel" style="color:var(--text-muted);font-weight:400">行业·岗位</span>
+                <span id="pjJobsCount" style="color:var(--text-muted);font-weight:400">(0)</span> ▾
+              </button>
+              <div class="pj-jobs-pop pj-cascade-pop" id="pjJobsPop">
+                <div class="pj-cascade">
+                  <div class="pj-cascade-left">
+                    <input type="text" id="pjIndustrySearch" class="pj-jobs-search" placeholder="搜索行业…" oninput="pjFilterIndustries()" />
+                    <ul id="pjIndustryList" class="pj-industry-list"></ul>
+                  </div>
+                  <div class="pj-cascade-right">
+                    <input type="text" id="pjJobsSearch" class="pj-jobs-search" placeholder="搜索岗位…" oninput="pjFilterJobs()" />
+                    <div id="pjJobsList" class="pj-jobs-list"></div>
+                    <div class="pj-jobs-bar">
+                      <button type="button" class="btn btn-ghost btn-sm" onclick="pjSelectAllJobs(true)">全选</button>
+                      <button type="button" class="btn btn-ghost btn-sm" onclick="pjInvertJobs()">反选</button>
+                      <button type="button" class="btn btn-ghost btn-sm" onclick="pjSelectAllJobs(false)">清空</button>
+                      <span class="pj-jobs-hint">选中=严格筛选 · 不选=展示全部</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="city-combo pj-city-wrap" id="pjCityCombo">
+              <div id="pjCitySelected" class="city-combo-trigger" onclick="pjOpenCityPanel(event)" title="按省份 → 城市（多选 / 不选=全部）">
+                <span>🌐 <span id="pjProvinceLabel">省·城市</span></span>
+                <span class="pj-chip-count" id="pjCityCount">全部</span>
+                <span class="pj-chip-caret">▾</span>
+              </div>
+              <div id="pjCityPanel" class="city-combo-pop pj-cascade-pop">
+                <div class="pj-cascade">
+                  <div class="pj-cascade-left">
+                    <input class="pj-jobs-search" id="pjProvinceSearch" placeholder="搜省份/直辖市…"
+                           oninput="pjFilterProvinces()" autocomplete="off">
+                    <ul id="pjProvinceList" class="pj-industry-list"></ul>
+                  </div>
+                  <div class="pj-cascade-right">
+                    <input class="pj-jobs-search" id="pjCitySearch" placeholder="搜城市名…"
+                           oninput="pjFilterCities()" autocomplete="off">
+                    <div id="pjCityProvinces" class="pj-jobs-list"></div>
+                    <div class="pj-jobs-bar">
+                      <button type="button" class="btn btn-ghost btn-sm" onclick="pjSelectAllCities(true)">全选</button>
+                      <button type="button" class="btn btn-ghost btn-sm" onclick="pjInvertCities()">反选</button>
+                      <button type="button" class="btn btn-ghost btn-sm" onclick="pjSelectAllCities(false)">清空</button>
+                      <span class="pj-jobs-hint">支持跨省累计</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="pj-edu-wrap" id="pjEduWrap">
+              <button type="button" class="pj-chip-btn" id="pjEduBtn" onclick="pjToggleEdu(event)" title="按学历过滤（多选 / 不选=全部）">
+                <span>🎓 学历</span>
+                <span class="pj-chip-count" id="pjEduCount">全部</span>
+                <span class="pj-chip-caret">▾</span>
+              </button>
+              <div class="pj-chip-pop" id="pjEduPop">
+                <div class="pj-edu-list" id="pjEduList"></div>
+                <div class="pj-jobs-bar">
+                  <button type="button" class="btn btn-ghost btn-sm" onclick="pjClearEdu()">清空</button>
+                  <span class="pj-jobs-hint">不选 = 不限</span>
+                </div>
+              </div>
+            </div>
+            <div class="pj-edu-wrap" id="pjDateWrap">
+              <button type="button" class="pj-chip-btn" id="pjDateBtn" onclick="pjToggleDate(event)" title="按发布时间过滤（单选）">
+                <span>📅 发布时间</span>
+                <span class="pj-chip-count" id="pjDateCount">全部</span>
+                <span class="pj-chip-caret">▾</span>
+              </button>
+              <div class="pj-chip-pop" id="pjDatePop">
+                <div class="pj-edu-list" id="pjDateList"></div>
+              </div>
+            </div>
+            <div class="pj-edu-wrap" id="pjCorpWrap">
+              <button type="button" class="pj-chip-btn" id="pjCorpBtn" onclick="pjToggleCorp(event)" title="按公司性质过滤（单选）：外企会自动加进全网搜索关键词">
+                <span>🏢 公司</span>
+                <span class="pj-chip-count" id="pjCorpCount">全部</span>
+                <span class="pj-chip-caret">▾</span>
+              </button>
+              <div class="pj-chip-pop" id="pjCorpPop">
+                <div class="pj-edu-list" id="pjCorpList"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="pj-sources">
+          <div class="pj-sources-label">岗位 自动 全网 搜</div>
+          <div class="pj-sources-grid" id="pjSourcesGrid">
+            <div style="color:var(--text-muted);font-size:11.5px;grid-column:1/-1;padding:8px">加载中…</div>
+          </div>
+        </div>
+        <div class="pj-table-wrap">
+          <table class="pj-table">
+            <thead><tr>
+              <th>公司</th>
+              <th>岗位</th>
+              <th class="col-loc">地点</th>
+              <th class="col-edu">学历</th>
+              <th class="col-src">来源</th>
+              <th class="col-time">发布时间</th>
+              <th class="col-time">截至时间</th>
+              <th class="col-corp" title="按公司名/标题关键词推断的公司类型">公司类型</th>
+              <th class="col-score sortable" id="pjScoreTh" onclick="pjToggleScoreSort()" title="点击切换是否按匹配分降序排（先点 ⭐ 匹配评分 才会有值）">匹配</th>
+              <th class="col-applied" title="点击 ○/✓ 标记是否已投递">标记投递</th>
+              <th class="col-link">↗</th>
+            </tr></thead>
+            <tbody id="pjTbody">
+              <tr class="pj-empty-row"><td colspan="11">点击「🔄 抓取」拉取最新公开岗位</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      </div><!-- /main-view public -->
+    </main>
+  </div>
+</div>
+
+<div class="toast-layer" id="toasts"></div>
+
+<!-- 求职偏好编辑弹层（LLM 匹配评分用） -->
+<div class="pj-prefs-modal-mask" id="pjPrefsMask" onclick="if(event.target===this)pjClosePrefsModal()">
+  <div class="pj-prefs-modal">
+    <h3>✍️ 求职偏好</h3>
+    <div class="hint">
+      用自然语言写明你的期望，越具体越准。LLM 会按这段文字给每个公开岗位打 0-100 的匹配分。
+    </div>
+    <textarea id="pjPrefsInput" placeholder="例：我是计算机硕士应届，想找北京/上海的 Python 后端或数据岗，月薪 20K 以上；不要外包、不去 996 公司；偏好大厂或外企；行业不限但优先金融科技。"></textarea>
+    <div class="pj-prefs-example">
+      <strong>建议覆盖：</strong>学历/经验 · 期望城市 · 期望薪资 · 岗位方向 · 排除条件（如不要外包/不要 996）· 公司类型偏好 · 行业偏好
+    </div>
+    <div class="pj-prefs-actions">
+      <button class="btn btn-ghost btn-sm" onclick="pjClosePrefsModal()">取消</button>
+      <button class="btn btn-primary btn-sm" onclick="pjSavePrefs()">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ========== STATE ==========
+let taskId = null, jobs = [], ws = null, sort = { f:null, asc:true };
+let _pjDiagInflight = false;
+// jobKey -> { tr: HTMLTableRowElement, statusKey: string } — 行级 DOM 缓存，避免全表重绘
+const rowMap = new Map();
+let tblPage = 1;
+const TBL_PAGE_SIZE = 20;
+let INDUSTRIES = {};  // 由 /api/industries 加载
+let historicalMode = false;  // 当前是否在展示跨任务历史聚合视图
+
+// ========== HELPERS ==========
+const q = s => document.querySelector(s);
+const qa = s => document.querySelectorAll(s);
+const esc = s => s ? String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;') : '';
+function safeUrl(u){
+  if(!u) return '#';
+  try{
+    const s = String(u).trim();
+    if(/^(https?:|mailto:)/i.test(s)) return s;
+    return '#';
+  }catch(_){ return '#'; }
+}
+
+function toast(msg, cls='', duration=3200) {
+  const el = document.createElement('div');
+  el.className = `toast ${cls}`;
+  // 支持换行：把 \n 转成 <br>，文本仍走 esc 防 XSS
+  el.innerHTML = String(msg).split('\n').map(line =>
+    line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  ).join('<br>');
+  q('#toasts').appendChild(el);
+  setTimeout(() => { el.style.opacity='0'; el.style.transition='opacity 300ms'; setTimeout(() => el.remove(), 350) }, duration);
+}
+
+function platforms() {
+  const m = { cbBoss:'boss', cbZl:'zhilian', cb51:'job51', cbLp:'liepin' };
+  return Object.entries(m).filter(([k]) => q('#'+k).checked).map(([,v]) => v);
+}
+
+function pfKey(name) {
+  if (name?.includes('Boss')) return 'boss';
+  if (name?.includes('智联')) return 'zhilian';
+  if (name?.includes('前程')) return 'job51';
+  if (name?.includes('猎聘')) return 'liepin';
+  return '';
+}
+function pfClass(name) {
+  if (name?.includes('Boss')) return 'pf-boss';
+  if (name?.includes('智联')) return 'pf-zl';
+  if (name?.includes('前程')) return 'pf-51';
+  if (name?.includes('猎聘')) return 'pf-lp';
+  return '';
+}
+
+// ========== PROGRESS UI ==========
+function setProg(key, count, st) {
+  const pc = q(`#pc-${key}`); if (!pc) return;
+  pc.dataset.status = st;
+  const badge = pc.querySelector('.pl-tile-badge') || pc.querySelector('.pc-badge');
+  const cnt = pc.querySelector('.pl-tile-count') || pc.querySelector('.pc-count');
+  if (badge) badge.textContent = {waiting:'等待',running:'投递中',done:'完成',error:'失败'}[st]||st;
+  if (cnt) cnt.textContent = count;
+}
+
+// ========== TABBED SIDEBAR ==========
+function switchTab(name) {
+  qa('.sb-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  qa('.sb-pane').forEach(p => p.classList.toggle('active', p.dataset.pane === name));
+  const panel = document.querySelector('.sb-panel');
+  if (panel) panel.dataset.active = name;
+}
+
+// ========== HISTORY (dropdown in results head) ==========
+function toggleHistory(e) {
+  e?.stopPropagation();
+  const pop = q('#historyPop');
+  if (!pop) return;
+  const open = pop.classList.toggle('open');
+  if (open) loadHistory();
+}
+
+document.addEventListener('click', (e) => {
+  const pop = q('#historyPop');
+  if (!pop || !pop.classList.contains('open')) return;
+  if (!e.target.closest('.hist-wrap')) pop.classList.remove('open');
+});
+
+async function loadHistory() {
+  const box = q('#historyList');
+  if (!box) return;
+  box.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:20px 0">加载中...</div>';
+  try {
+    const r = await fetch('/api/tasks?limit=50');
+    const d = await r.json();
+    const list = d.tasks || [];
+    if (!list.length) {
+      box.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:12px;padding:24px 0">暂无历史任务</div>';
+      return;
+    }
+    box.innerHTML = list.map(t => {
+      const p = t.params || {};
+      const kws = (p.keywords && p.keywords.length ? p.keywords : (p.keyword ? [p.keyword] : [])).slice(0, 3).join(', ');
+      const cities = (p.cities && p.cities.length ? p.cities : (p.city ? [p.city] : [])).slice(0, 3).join(', ');
+      const when = t.started_at ? new Date(t.started_at).toLocaleString('zh-CN', { hour12: false }) : '—';
+      const statusColor = {
+        done: 'var(--green)', running: 'var(--accent)',
+        failed: 'var(--red)', stopped: 'var(--text-muted)',
+        pending: 'var(--text-muted)',
+      }[t.status] || 'var(--text-muted)';
+      return `
+        <div class="hist-card" data-tid="${t.task_id}" onclick="loadTask('${t.task_id}')">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="font-size:12px;font-weight:600;color:var(--text-body)">
+              ${kws || '(无关键词)'}
+            </span>
+            <span style="font-size:10px;font-family:var(--font-mono);color:${statusColor}">
+              ${t.status}
+            </span>
+          </div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">
+            ${cities || '全国'} · 共 ${t.total || 0} 条 · 已投 ${t.applied || 0}
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:10px;color:var(--text-muted);font-family:var(--font-mono)">${when}</span>
+            <span style="font-size:10px;color:var(--red);cursor:pointer"
+                  onclick="event.stopPropagation();delTask('${t.task_id}')">删除</span>
+          </div>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    box.innerHTML = '<div style="text-align:center;color:var(--red);font-size:12px;padding:20px 0">加载失败</div>';
+  }
+}
+
+async function loadTask(tid) {
+  taskId = tid;
+  exitHistoricalView();
+  q('#historyPop')?.classList.remove('open');
+  await loadRes(tid);
+  await loadStats(tid);
+  toast(`已加载任务 ${tid}`, 'ok');
+}
+
+async function delTask(tid) {
+  if (!confirm(`确定删除任务 ${tid} 及其所有职位？`)) return;
+  try {
+    await fetch(`/api/tasks/${tid}`, { method: 'DELETE' });
+    toast('已删除', 'ok');
+    loadHistory();
+    if (historicalMode) loadRecentJobs();  // 删除后刷新聚合视图
+  } catch {
+    toast('删除失败', 'err');
+  }
+}
+
+async function clearHistory() {
+  if (!confirm('确定清空全部历史记录？此操作不可恢复。')) return;
+  try {
+    await fetch('/api/tasks', { method: 'DELETE' });
+    toast('历史记录已清空', 'ok');
+    loadHistory();
+    if (historicalMode) {
+      jobs = [];
+      rowMap.clear();
+      historicalMode = false;
+      const badge = q('#histBadge');
+      if (badge) badge.style.display = 'none';
+      renderTbl();
+    }
+  } catch {
+    toast('清空失败', 'err');
+  }
+}
+
+// ========== HISTORICAL AGGREGATE VIEW ==========
+// 当前没有进行中的任务时，把整个数据库的最近投递展示在表格里
+async function loadRecentJobs() {
+  if (taskId) return;  // 有活动任务时不进入聚合视图
+  try {
+    const r = await fetch('/api/recent-jobs?limit=500');
+    const d = await r.json();
+    jobs = d.jobs || [];
+    rowMap.clear();
+    historicalMode = jobs.length > 0;
+    const badge = q('#histBadge');
+    if (badge) {
+      if (jobs.length > 0) {
+        badge.textContent = `📜 历史聚合 · ${jobs.length} 条`;
+        badge.style.display = 'inline-flex';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
+    updateCityFilterOptions();
+    renderTbl();
+    if (!jobs.length) return;
+    // 同步顶部 KPI（基于聚合数据）
+    const applied = jobs.filter(j => j.apply_status === 'applied').length;
+    const cities = new Set(jobs.map(j => j.city).filter(Boolean));
+    const avgs = jobs.map(j => ((j.salary_min||0)+(j.salary_max||0))/2).filter(v=>v>0);
+    q('#sTotal').textContent = jobs.length;
+    q('#sApplied').textContent = applied;
+    q('#sAvgSal').textContent = avgs.length ? (avgs.reduce((a,b)=>a+b,0)/avgs.length).toFixed(1) : '—';
+    q('#sCities').textContent = cities.size;
+  } catch (e) {
+    console.warn('loadRecentJobs failed', e);
+  }
+}
+
+function exitHistoricalView() {
+  historicalMode = false;
+  const badge = q('#histBadge');
+  if (badge) badge.style.display = 'none';
+}
+
+// ========== WEBSOCKET ==========
+// 用 platform+job_id 作为唯一键，便于 update 时定位旧记录
+function _jobKey(j) {
+  return `${j.platform || ''}::${j.job_id || ''}::${j.job_title || ''}::${j.company_name || ''}`;
+}
+function _upsertJob(incoming) {
+  const k = _jobKey(incoming);
+  const idx = jobs.findIndex(x => _jobKey(x) === k);
+  if (idx >= 0) {
+    jobs[idx] = { ...jobs[idx], ...incoming };
+  } else {
+    jobs.push(incoming);
+    updateCityFilterOptions();  // 新城市可能出现
+  }
+}
+
+let _liveRenderTimer = null;
+function _scheduleLiveRender() {
+  if (_liveRenderTimer) return;
+  _liveRenderTimer = setTimeout(() => {
+    _liveRenderTimer = null;
+    renderTbl();
+    // 同步轻量统计
+    const applied = jobs.filter(j => j.apply_status === 'applied').length;
+    const elA = q('#sApplied'); if (elA) elA.textContent = applied;
+    const elT = q('#sTotal'); if (elT) elT.textContent = jobs.length;
+  }, 150);  // 150ms 节流，避免每条消息都重渲染
+}
+
+let _wsReconnectDelay = 1000;
+let _wsReconnectTimer = null;
+let _wsTaskId = null;
+let _wsLastMsgAt = 0;
+
+function wsConnect(tid) {
+  if (ws) { try{ws.close()}catch(e){} ws = null }
+  _wsTaskId = tid;
+  _wsReconnectDelay = 1000;
+  const p = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${p}//${location.host}/ws/${tid}`);
+  ws.onmessage = e => {
+    _wsLastMsgAt = Date.now();
+    let m; try { m = JSON.parse(e.data) } catch { return }
+    if (m.type === 'progress') {
+      const k = pfKey(m.platform_key || m.platform); if (k) setProg(k, m.count, m.status);
+    } else if (m.type === 'job' && m.job) {
+      _upsertJob(m.job);
+      _scheduleLiveRender();
+    } else if (m.type === 'log' && m.message) {
+      appendLog(m.message);
+    }
+  };
+  ws.onclose = (e) => {
+    if (!_wsTaskId) return;
+    if (_wsReconnectTimer) return;
+    _wsReconnectTimer = setTimeout(() => {
+      _wsReconnectTimer = null;
+      if (_wsTaskId) wsConnect(_wsTaskId);
+    }, _wsReconnectDelay);
+    _wsReconnectDelay = Math.min(_wsReconnectDelay * 2, 30000);
+  };
+  ws.onerror = () => {};
+}
+
+function wsDisconnect() {
+  _wsTaskId = null;
+  if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
+  if (ws) { try{ws.close()}catch(e){} ws = null; }
+}
+
+// ========== LOG PANEL ==========
+let logLines = [];
+const MAX_LOG_LINES = 200;
+
+function appendLog(msg) {
+  const panel = q('#logPanel');
+  if (panel) { panel.style.display = ''; panel.classList.add('open'); }
+  const body = q('#logBody');
+  if (!body) return;
+  logLines.push(msg);
+  if (logLines.length > MAX_LOG_LINES) logLines.shift();
+  const div = document.createElement('div');
+  div.className = 'log-line' + getLogClass(msg);
+  div.textContent = msg.replace(/^\s+/, '');
+  body.appendChild(div);
+  body.scrollTop = body.scrollHeight;
+  const cnt = q('#logCount');
+  if (cnt) cnt.textContent = logLines.length;
+}
+
+function getLogClass(msg) {
+  if (/✓|applied|完成/.test(msg)) return ' log-ok';
+  if (/⊘|筛选跳过|规则跳过|skipped/.test(msg)) return ' log-skip';
+  if (/✗|failed|失败|error/.test(msg)) return ' log-fail';
+  if (/招呼语|提取质量|开始投递/.test(msg)) return ' log-info';
+  return '';
+}
+
+function toggleLogPanel() {
+  const panel = q('#logPanel');
+  if (panel) panel.classList.toggle('open');
+}
+
+function clearLogs() {
+  logLines = [];
+  const body = q('#logBody');
+  if (body) body.innerHTML = '';
+  const cnt = q('#logCount');
+  if (cnt) cnt.textContent = '0';
+}
+
+// ========== INDUSTRY MODE ==========
+async function loadIndustries() {
+  try {
+    const r = await fetch('/api/industries');
+    const d = await r.json();
+    INDUSTRIES = d.industries || {};
+    const sel = q('#industrySel');
+    sel.innerHTML = '<option value="">请选择行业</option>' +
+      Object.keys(INDUSTRIES).map(name =>
+        `<option value="${esc(name)}">${esc(name)}</option>`).join('');
+  } catch (e) { console.warn('loadIndustries failed', e); }
+}
+
+function onIndustryChange() {
+  const name = q('#industrySel').value;
+  const list = INDUSTRIES[name] || [];
+  const wrap = q('#jobsList');
+  if (!list.length) { q('#jobsField').style.display = 'none'; return; }
+  q('#jobsField').style.display = 'block';
+  wrap.innerHTML = list.map((job, i) => `
+    <div class="job-pill">
+      <input type="checkbox" id="job_${i}" value="${esc(job)}">
+      <label for="job_${i}">${esc(job)}</label>
+    </div>`).join('');
+}
+
+function selectAllJobs(checked) {
+  qa('#jobsList input[type=checkbox]').forEach(c => c.checked = checked);
+}
+
+function getSelectedJobs() {
+  return Array.from(qa('#jobsList input[type=checkbox]:checked')).map(c => c.value);
+}
+
+// 模式切换
+qa('input[name=modeSel]').forEach(r => r.addEventListener('change', () => {
+  const isIndustry = q('#modeIndustry').checked;
+  q('#industryMode').style.display = isIndustry ? 'block' : 'none';
+  q('#kwMode').style.display = isIndustry ? 'none' : 'block';
+}));
+
+// ========== CITY MULTI-SELECT ==========
+let CITY_DATA = { hot: [], provinces: {} };
+let selectedCities = [];
+
+async function loadCities() {
+  try {
+    const r = await fetch('/api/cities');
+    CITY_DATA = await r.json();
+    renderCityPanel();
+    renderCitySelected();
+  } catch (e) { console.warn('loadCities failed', e); }
+}
+
+function renderCityPanel() {
+  const wrap = q('#cityProvinces');
+  let html = '<div class="prov-label">热门城市</div><div>';
+  html += CITY_DATA.hot.map(c =>
+    `<span class="city-pill ${selectedCities.includes(c)?'active':''}" onclick="toggleCity('${c}')">${c}</span>`
+  ).join('');
+  html += '</div>';
+  for (const [prov, list] of Object.entries(CITY_DATA.provinces || {})) {
+    html += `<div class="prov-label">${prov}</div><div>`;
+    html += list.map(c =>
+      `<span class="city-pill ${selectedCities.includes(c)?'active':''}" data-city="${c}" onclick="toggleCity('${c}')">${c}</span>`
+    ).join('');
+    html += '</div>';
+  }
+  wrap.innerHTML = html;
+}
+
+function renderCitySelected() {
+  const sel = q('#citySelected');
+  const caret = '<span class="city-caret">▾</span>';
+  if (!selectedCities.length) {
+    sel.innerHTML = '<span class="city-placeholder">点击选择城市（支持搜索）</span>' + caret;
+    return;
+  }
+  sel.innerHTML = selectedCities.map(c =>
+    `<span class="city-tag">${esc(c)}<span class="city-tag-x" onclick="event.stopPropagation();toggleCity('${c}')">×</span></span>`
+  ).join('') + caret;
+}
+
+function toggleCity(c) {
+  const i = selectedCities.indexOf(c);
+  if (i >= 0) selectedCities.splice(i, 1);
+  else selectedCities.push(c);
+  renderCityPanel();
+  renderCitySelected();
+}
+
+function openCityPanel(ev) {
+  if (ev) ev.stopPropagation();
+  const combo = q('#cityCombo');
+  const wasOpen = combo.classList.contains('open');
+  combo.classList.toggle('open');
+  if (!wasOpen) {
+    setTimeout(() => { const s = q('#citySearch'); if (s) s.focus(); }, 30);
+  }
+}
+
+function closeCityPanel() {
+  const combo = q('#cityCombo');
+  if (combo) combo.classList.remove('open');
+}
+
+document.addEventListener('click', (e) => {
+  const combo = q('#cityCombo');
+  if (!combo || !combo.classList.contains('open')) return;
+  if (!combo.contains(e.target)) closeCityPanel();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeCityPanel();
+});
+
+function filterCities() {
+  const kw = q('#citySearch').value.trim().toLowerCase();
+  q('#cityProvinces').querySelectorAll('.city-pill').forEach(el => {
+    const txt = el.textContent.toLowerCase();
+    el.style.display = !kw || txt.includes(kw) ? '' : 'none';
+  });
+  // Hide province labels whose group has no visible pills (only when searching)
+  q('#cityProvinces').querySelectorAll('.prov-label').forEach(label => {
+    if (!kw) { label.style.display = ''; return; }
+    let n = label.nextElementSibling;
+    let anyVisible = false;
+    if (n) {
+      n.querySelectorAll('.city-pill').forEach(p => {
+        if (p.style.display !== 'none') anyVisible = true;
+      });
+    }
+    label.style.display = anyVisible ? '' : 'none';
+    if (n) n.style.display = anyVisible ? '' : 'none';
+  });
+}
+
+// ========== RESULT FILTERS ==========
+function resetFilters() {
+  q('#fStatus').value = '';
+  q('#fPlatform').value = '';
+  q('#fCity').value = '';
+  q('#fSal').value = '';
+  q('#fKw').value = '';
+  renderTbl();
+}
+
+function updateCityFilterOptions() {
+  const sel = q('#fCity');
+  const cur = sel.value;
+  // 把 "北京-海淀区" / "深圳·南山区" 拆出市级 + 区级两类，都放进下拉
+  const parts = new Set();
+  for (const j of jobs) {
+    const raw = (j.city || '').trim();
+    if (!raw) continue;
+    parts.add(raw);  // 完整地点（兼容老用法）
+    for (const seg of raw.split(/[·\-－—\s]+/).filter(Boolean)) {
+      parts.add(seg);
+    }
+  }
+  const cities = [...parts].sort();
+  sel.innerHTML = '<option value="">全部</option>' +
+    cities.map(c => `<option value="${esc(c)}"${c===cur?' selected':''}>${esc(c)}</option>`).join('');
+}
+
+// ========== GO ==========
+async function go() {
+  const isIndustry = q('#modeIndustry').checked;
+  let keywords = [];
+  if (isIndustry) {
+    keywords = getSelectedJobs();
+    if (!keywords.length) {
+      return toast('请至少选择一个岗位', 'err');
+    }
+  } else {
+    const kw = q('#kw').value.trim();
+    if (!kw) return toast('请输入职位关键词', 'err'), q('#kw').focus();
+    keywords = [kw];
+  }
+
+  const btn = q('#btnGo'); btn.disabled = true;
+  btn.innerHTML = '<span style="animation:pulse 0.6s ease-in-out infinite">◉</span> 投递中...';
+  q('#btnStop').style.display = 'inline-flex';
+  q('#btnStop').disabled = false;
+
+  exitHistoricalView();
+  clearLogs();
+  jobs = []; rowMap.clear(); renderTbl(); q('#tblCount').textContent = '0';
+  ['boss','zhilian','job51','liepin'].forEach(k => setProg(k, 0, 'waiting'));
+  q('#sTotal').textContent = '—'; q('#sApplied').textContent = '—';
+  q('#sAvgSal').textContent = '—'; q('#sCities').textContent = '—';
+
+  const llmCfg = getLLMConfig();
+  const greetingTpl = q('#greetingTpl').value.trim() || null;
+  const excludeRules = q('#excludeRules').value.trim() || null;
+  const applyRate = (document.querySelector('input[name="applyRate"]:checked') || {}).value || 'normal';
+  // 收集每个平台的投递上限
+  const limMap = {
+    boss: +q('#limBoss').value || 0,
+    zhilian: +q('#limZl').value || 0,
+    job51: +q('#lim51').value || 0,
+    liepin: +q('#limLp').value || 0,
+  };
+  const platformLimits = {};
+  for (const [k, v] of Object.entries(limMap)) if (v > 0) platformLimits[k] = v;
+  const body = {
+    keyword: keywords.length === 1 ? keywords[0] : null,
+    keywords: keywords.length > 1 ? keywords : null,
+    cities: selectedCities.length ? selectedCities : null,
+    city: selectedCities.length === 1 ? selectedCities[0] : null,
+    salary_min: q('#salMin').value ? +q('#salMin').value : null,
+    salary_max: q('#salMax').value ? +q('#salMax').value : null,
+    experience: q('#exp').value || null,
+    education: q('#edu').value || null,
+    platforms: platforms(),
+    auto_apply: true,
+    greeting_template: greetingTpl,
+    exclude_rules: excludeRules,
+    platform_limits: Object.keys(platformLimits).length ? platformLimits : null,
+    apply_rate: applyRate,
+    llm_config: llmCfg,
+  };
+  if (!body.platforms.length) {
+    btn.disabled = false; btn.innerHTML = '<span>▶</span> 开始投递';
+    return toast('至少选择一个平台', 'err');
+  }
+
+  try {
+    const r = await fetch('/api/scrape', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+    const d = await r.json(); taskId = d.task_id;
+    body.platforms.forEach(k => setProg(k, 0, 'running'));
+    wsConnect(taskId);
+
+    await poll(taskId);
+    await loadRes(taskId);
+    await loadStats(taskId);
+    toast(`完成 · 共 ${jobs.length} 条职位`, 'ok');
+    q('#statusLabel').textContent = '就绪';
+  } catch(e) {
+    toast(`失败: ${e.message}`, 'err');
+    q('#statusLabel').textContent = '错误';
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<span>▶</span> 开始投递';
+    q('#btnStop').style.display = 'none';
+  }
+}
+
+// 停止投递
+async function stopTask() {
+  if (!taskId) return;
+  const stopBtn = q('#btnStop');
+  stopBtn.disabled = true;
+  stopBtn.innerHTML = '<span>◉</span> 停止中...';
+  try {
+    const r = await fetch(`/api/stop/${taskId}`, { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) {
+      toast('已发送停止信号，正在收尾...', 'ok');
+      q('#statusLabel').textContent = '停止中';
+    } else {
+      toast(d.error || '停止失败', 'err');
+      stopBtn.disabled = false;
+      stopBtn.innerHTML = '<span>■</span> 停止投递';
+    }
+  } catch (e) {
+    toast('停止失败: ' + e.message, 'err');
+    stopBtn.disabled = false;
+    stopBtn.innerHTML = '<span>■</span> 停止投递';
+  }
+}
+
+async function poll(tid) {
+  let fin = false;
+  let errCount = 0;
+  while (!fin) {
+    await sleep(1200);
+    try {
+      const r = await fetch(`/api/status/${tid}`); const d = await r.json();
+      errCount = 0;
+      if (d.progress) for (const [k,v] of Object.entries(d.progress)) setProg(k, v.count||0, v.status||'waiting');
+      const statusMap = { running: '投递中…', stopping: '停止中…', stopped: '已停止', done: '完成', failed: '失败' };
+      q('#statusLabel').textContent = statusMap[d.status] || d.status;
+      // M20: 心跳超时检测 — 超过 90 秒无 WebSocket 消息则提示
+      if (d.status === 'running' && _wsLastMsgAt && Date.now() - _wsLastMsgAt > 90000) {
+        q('#statusLabel').textContent = '投递中（通信超时，可能卡住）';
+      }
+      if (d.status === 'done' || d.status === 'failed' || d.status === 'stopped') {
+        fin = true;
+        if (d.error && d.status !== 'stopped') toast(_friendlyError(d.error), 'err');
+        if (d.status === 'stopped') toast('已停止投递', 'ok');
+      }
+    } catch {
+      errCount++;
+      if (errCount >= 5) { fin = true; toast('连接中断，请刷新页面重试', 'err'); }
+    }
+  }
+  wsDisconnect();
+}
+
+function _friendlyError(msg) {
+  if (!msg) return '未知错误';
+  if (msg.includes('Timeout') || msg.includes('timeout')) return '浏览器操作超时，请重试';
+  if (msg.includes('net::') || msg.includes('ERR_')) return '网络连接失败，请检查网络';
+  if (msg.includes('login') || msg.includes('登录')) return '需要登录验证，请在浏览器中登录后重试';
+  if (msg.length > 80) return msg.slice(0, 80) + '…';
+  return msg;
+}
+
+async function loadRes(tid) {
+  try {
+    const r = await fetch(`/api/results/${tid}`); const d = await r.json();
+    jobs = d.jobs || [];
+    const ac = jobs.filter(j => j.apply_status === 'applied').length;
+    const sc = jobs.filter(j => j.apply_status === 'skipped').length;
+    const fc = jobs.filter(j => j.apply_status === 'failed').length;
+    console.log(`[loadRes] ${jobs.length} jobs loaded: applied=${ac}, skipped=${sc}, failed=${fc}`);
+    rowMap.clear();
+    updateCityFilterOptions();
+    renderTbl();
+  } catch { toast('加载结果失败，请刷新重试', 'err'); }
+}
+
+async function loadStats(tid) {
+  try {
+    const r = await fetch(`/api/stats/${tid}`); const s = await r.json();
+    q('#sTotal').textContent = s.total || 0;
+    const appliedCount = jobs.filter(j => j.apply_status === 'applied').length;
+    q('#sApplied').textContent = appliedCount || '—';
+    if (jobs.length) {
+      const avgs = jobs.map(j => ((j.salary_min||0)+(j.salary_max||0))/2).filter(v=>v>0);
+      q('#sAvgSal').textContent = avgs.length ? (avgs.reduce((a,b)=>a+b,0)/avgs.length).toFixed(1) : '—';
+    }
+    q('#sCities').textContent = Object.keys(s.cities||{}).length;
+  } catch { toast('加载统计失败', 'err'); }
+}
+
+// ========== TABLE ==========
+function renderTbl(field, asc) {
+  const tbody = q('#tblBody');
+  // 更新统计 pill（基于全部 jobs，不受筛选影响）
+  const appliedAll = jobs.filter(j => j.apply_status === 'applied').length;
+  const skippedAll = jobs.filter(j => j.apply_status === 'skipped').length;
+  const failedAll = jobs.filter(j => j.apply_status === 'failed').length;
+  const elA = q('#pillApplied'); if (elA) elA.textContent = appliedAll;
+  const elS = q('#pillSkipped'); if (elS) elS.textContent = skippedAll;
+  const elF = q('#pillFailed'); if (elF) elF.textContent = failedAll;
+  const elTot = q('#tblTotal'); if (elTot) elTot.textContent = jobs.length;
+
+  if (!jobs.length) {
+    tbody.innerHTML = `<tr><td colspan="10"><div class="empty"><div class="empty-glyph">&#9679;&#9675;&#9679;</div><div class="empty-text">暂无数据</div></div></td></tr>`;
+    const elC = q('#tblCount'); if (elC) elC.textContent = 0;
+    return;
+  }
+
+  // 读取筛选条件
+  const fStatus = (q('#fStatus')?.value || '').trim();
+  const fPlatform = (q('#fPlatform')?.value || '').trim();
+  const fCity = (q('#fCity')?.value || '').trim();
+  const fSalMin = parseFloat(q('#fSal')?.value || '');
+  const fKw = (q('#fKw')?.value || '').trim().toLowerCase();
+
+  let data = jobs.filter(j => {
+    // 状态过滤
+    if (fStatus) {
+      if (fStatus === 'pending') {
+        if (j.apply_status) return false;
+      } else if (j.apply_status !== fStatus) return false;
+    }
+    // 平台过滤
+    if (fPlatform && j.platform !== fPlatform) return false;
+    // 城市过滤（子串匹配，使 "北京" 也能命中 "北京-海淀区"）
+    if (fCity && !(j.city || '').includes(fCity)) return false;
+    // 薪资过滤 (最低)
+    if (!isNaN(fSalMin) && fSalMin > 0) {
+      const sm = j.salary_min || 0;
+      if (sm < fSalMin) return false;
+    }
+    // 关键词模糊匹配
+    if (fKw) {
+      const blob = `${j.job_title||''} ${j.company_name||''} ${j.city||''} ${(j.tags||[]).join(' ')}`.toLowerCase();
+      if (!blob.includes(fKw)) return false;
+    }
+    return true;
+  });
+
+  if (field) {
+    data.sort((a,b) => {
+      let va=a[field]??'', vb=b[field]??'';
+      if (typeof va==='number'&&typeof vb==='number') return asc?va-vb:vb-va;
+      va=String(va); vb=String(vb);
+      return asc ? va.localeCompare(vb,'zh-CN') : vb.localeCompare(va,'zh-CN');
+    });
+  }
+
+  const elC = q('#tblCount'); if (elC) elC.textContent = data.length;
+  const elVT = q('#vtApplyCount'); if (elVT) elVT.textContent = data.length;
+
+  const pagerEl = q('#tblPager');
+
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="10"><div class="empty"><div class="empty-glyph">&#9679;&#9675;&#9679;</div><div class="empty-text">没有匹配筛选条件的结果</div></div></td></tr>`;
+    if (pagerEl) pagerEl.innerHTML = '';
+    return;
+  }
+
+  // 分页
+  const totalPages = Math.ceil(data.length / TBL_PAGE_SIZE);
+  if (tblPage > totalPages) tblPage = totalPages;
+  if (tblPage < 1) tblPage = 1;
+  const pageData = data.slice((tblPage - 1) * TBL_PAGE_SIZE, tblPage * TBL_PAGE_SIZE);
+
+  // 行级增量更新：复用已存在的 <tr>，仅当 status 变化时改对应单元格。
+  const frag = document.createDocumentFragment();
+  for (const j of pageData) {
+    const key = _jobKey(j);
+    let entry = rowMap.get(key);
+    const sk = _statusKey(j);
+    if (!entry) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = _buildRowHTML(j);
+      entry = { tr, statusKey: sk };
+      rowMap.set(key, entry);
+    } else if (entry.statusKey !== sk) {
+      const statusTd = entry.tr.children[7];
+      if (statusTd) statusTd.innerHTML = _buildStatusCell(j);
+      const detailTd = entry.tr.children[8];
+      if (detailTd) detailTd.innerHTML = _buildDetailCell(j);
+      entry.statusKey = sk;
+    }
+    frag.appendChild(entry.tr);
+  }
+  tbody.replaceChildren(frag);
+
+  // 渲染分页器
+  if (pagerEl) {
+    if (totalPages <= 1) {
+      pagerEl.innerHTML = '';
+    } else {
+      let pg = `<button ${tblPage<=1?'disabled':''} onclick="tblPage=1;renderTbl()">«</button>`;
+      pg += `<button ${tblPage<=1?'disabled':''} onclick="tblPage--;renderTbl()">‹</button>`;
+      const range = 2;
+      let start = Math.max(1, tblPage - range);
+      let end = Math.min(totalPages, tblPage + range);
+      if (start > 1) pg += `<span class="pg-dots">…</span>`;
+      for (let i = start; i <= end; i++) {
+        pg += `<button class="${i===tblPage?'pg-cur':''}" onclick="tblPage=${i};renderTbl()">${i}</button>`;
+      }
+      if (end < totalPages) pg += `<span class="pg-dots">…</span>`;
+      pg += `<button ${tblPage>=totalPages?'disabled':''} onclick="tblPage++;renderTbl()">›</button>`;
+      pg += `<button ${tblPage>=totalPages?'disabled':''} onclick="tblPage=${totalPages};renderTbl()">»</button>`;
+      pg += `<span style="margin-left:8px;color:var(--text-muted);font-size:12px">${data.length} 条 / ${totalPages} 页</span>`;
+      pagerEl.innerHTML = pg;
+    }
+  }
+}
+
+// 仅 status 相关字段；其它字段抓取后不变，不需进入比较
+function _statusKey(j) {
+  return `${j.apply_status||''}::${j.apply_skip_reason||''}`;
+}
+
+function _buildStatusCell(j) {
+  if (j.apply_status === 'applied') {
+    return `<span style="color:var(--green);font-size:12px">✓ 已投递</span>`;
+  }
+  if (j.apply_status === 'skipped') {
+    const reason = j.apply_skip_reason ? ` title="${esc(j.apply_skip_reason)}"` : '';
+    return `<span style="color:var(--text-muted);font-size:12px"${reason}>⊘ 跳过${j.apply_skip_reason?' ⓘ':''}</span>`;
+  }
+  if (j.apply_status === 'failed') {
+    const reason = j.apply_skip_reason ? ` title="${esc(j.apply_skip_reason)}"` : '';
+    return `<span style="color:var(--red);font-size:12px"${reason}>✗ 失败${j.apply_skip_reason?' ⓘ':''}</span>`;
+  }
+  if (j.apply_status === 'login_required') {
+    return `<span style="color:#e0a050;font-size:12px">⚠ 需登录</span>`;
+  }
+  return '—';
+}
+
+function _buildDetailCell(j) {
+  if (j.apply_status === 'applied' && j.greeting_sent) {
+    const preview = esc(j.greeting_sent).replace(/\n/g, ' ');
+    const short = preview.length > 40 ? preview.slice(0, 40) + '…' : preview;
+    return `<span class="td-detail td-greeting" title="${preview}">${short}</span>`;
+  }
+  if (j.apply_status === 'skipped' && j.apply_skip_reason) {
+    return `<span class="td-detail td-skip">${esc(j.apply_skip_reason)}</span>`;
+  }
+  if (j.apply_status === 'failed' && j.apply_skip_reason) {
+    return `<span class="td-detail td-fail">${esc(j.apply_skip_reason)}</span>`;
+  }
+  return '<span class="td-detail">—</span>';
+}
+
+function _buildRowHTML(j) {
+  return `
+      <td class="td-title" title="${esc(j.job_title)}">${esc(j.job_title)}</td>
+      <td title="${esc(j.company_name)}">${esc(j.company_name)}</td>
+      <td class="td-salary">${esc(j.salary_range||'面议')}</td>
+      <td>${esc(j.city||'—')}</td>
+      <td>${esc(j.experience_required||'—')}</td>
+      <td>${esc(j.education_required||'—')}</td>
+      <td><span class="td-platform ${pfClass(j.platform_name)}">${esc(j.platform_name)}</span></td>
+      <td>${_buildStatusCell(j)}</td>
+      <td>${_buildDetailCell(j)}</td>
+      <td>${j.job_url?`<a href="${safeUrl(j.job_url)}" target="_blank" title="查看详情">&rarr;</a>`:'—'}</td>`;
+}
+
+qa('.tbl th[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const f = th.dataset.sort;
+    const asc = sort.f === f ? !sort.asc : true;
+    sort = {f, asc};
+    qa('.tbl th').forEach(t => t.classList.remove('sorted'));
+    th.classList.add('sorted');
+    th.textContent = th.textContent.replace(/ [▲▼]$/,'') + (asc?' ▲':' ▼');
+    tblPage = 1;
+    renderTbl(f, asc);
+  });
+});
+
+// ========== RESET ==========
+function reset() {
+  q('#kw').value=''; q('#salMin').value=''; q('#salMax').value='';
+  q('#exp').value=''; q('#edu').value='';
+  // 重置城市多选
+  selectedCities = [];
+  renderCityPanel(); renderCitySelected();
+  // 重置投递规则与平台上限
+  const er = q('#excludeRules'); if (er) er.value = '';
+  ['limBoss','limZl','lim51','limLp'].forEach(id => { const e = q('#'+id); if (e) e.value = '' });
+  // 重置平台选择（默认全部不选）与投递速率
+  ['cbBoss','cbZl','cb51','cbLp'].forEach(id => { const e = q('#'+id); if (e) e.checked = false });
+  const rateNormal = document.querySelector('input[name="applyRate"][value="normal"]');
+  if (rateNormal) rateNormal.checked = true;
+  // 重置行业/岗位选择
+  const indSel = q('#industrySel'); if (indSel) indSel.value = '';
+  const jobsField = q('#jobsField'); if (jobsField) jobsField.style.display = 'none';
+  const jobsList = q('#jobsList'); if (jobsList) jobsList.innerHTML = '';
+  // 重置模式回到行业模式
+  const modeInd = q('#modeIndustry'); if (modeInd) modeInd.checked = true;
+  const indMode = q('#industryMode'); if (indMode) indMode.style.display = 'block';
+  const kwMode = q('#kwMode'); if (kwMode) kwMode.style.display = 'none';
+  // 重置筛选条件
+  resetFilters();
+  clearLogs();
+  const lp = q('#logPanel'); if (lp) { lp.style.display = 'none'; lp.classList.remove('open'); }
+  jobs=[]; rowMap.clear(); taskId=null; renderTbl();
+  ['boss','zhilian','job51','liepin'].forEach(k=>setProg(k,0,'waiting'));
+  q('#sTotal').textContent='—'; q('#sApplied').textContent='—';
+  q('#sAvgSal').textContent='—'; q('#sCities').textContent='—';
+  q('#statusLabel').textContent='就绪';
+  if (ws) { wsDisconnect(); }
+  // 重新进入历史聚合视图
+  loadRecentJobs();
+}
+
+// ========== LLM CONFIG ==========
+// 常用提供商默认 Base URL
+const KNOWN_BASES = {
+  deepseek: 'https://api.deepseek.com/v1',
+  anthropic: 'https://api.anthropic.com/v1',
+  openai: 'https://api.openai.com/v1',
+  openrouter: 'https://openrouter.ai/api/v1',
+  siliconflow: 'https://api.siliconflow.cn/v1',
+};
+
+function onLLMChange() {
+  const prov = q('#llmProvider').value.trim().toLowerCase();
+  // 自动填充 Base URL（如果留空且是已知提供商）
+  if (!q('#llmBase').value.trim() && KNOWN_BASES[prov]) {
+    q('#llmBase').placeholder = KNOWN_BASES[prov];
+  }
+  const hasKey = q('#llmKey').value.trim();
+  const hasProv = prov.length > 0;
+  q('#llmStatus').textContent = hasProv && hasKey ? '已配置 ✓' : '未配置';
+  q('#llmStatus').style.color = hasProv && hasKey ? 'var(--green)' : 'var(--text-muted)';
+}
+
+function getLLMConfig() {
+  const provider = q('#llmProvider').value.trim();
+  const key = q('#llmKey').value.trim();
+  if (!provider || !key) return null;
+  return {
+    provider: provider,
+    model: q('#llmModel').value.trim(),
+    api_key: key,
+    base_url: q('#llmBase').value.trim(),
+  };
+}
+
+// 保存到后端 .env 文件
+async function saveConfigToServer() {
+  const cfg = getLLMConfig();
+  if (!cfg) return toast('请填写提供商和 API Key', 'err');
+
+  const btn = q('#btnSaveConfig');
+  const saved = q('#cfgSaved');
+  btn.disabled = true;
+  btn.textContent = '保存中...';
+
+  try {
+    const resp = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cfg),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      // 同步到 localStorage
+      localStorage.setItem('jobspider_llm', JSON.stringify(cfg));
+      onLLMChange();
+      saved.style.display = 'inline';
+      setTimeout(() => { saved.style.display = 'none' }, 3000);
+      toast('配置已保存到 .env ✓', 'ok');
+    } else {
+      toast('保存失败: ' + (data.error || '未知错误'), 'err');
+    }
+  } catch (e) {
+    toast('保存失败: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 保存到 .env';
+  }
+}
+
+// 从后端加载已有配置
+async function loadConfigFromServer() {
+  try {
+    const resp = await fetch('/api/config');
+    const data = await resp.json();
+    if (data.config) {
+      const c = data.config;
+      if (c.provider) q('#llmProvider').value = c.provider;
+      if (c.model) q('#llmModel').value = c.model;
+      if (c.api_key) q('#llmKey').value = c.api_key;
+      if (c.base_url) q('#llmBase').value = c.base_url;
+      onLLMChange();
+      return;
+    }
+  } catch {}
+  // 回退到 localStorage
+  try {
+    const raw = localStorage.getItem('jobspider_llm');
+    if (raw) {
+      const cfg = JSON.parse(raw);
+      if (cfg.provider) q('#llmProvider').value = cfg.provider;
+      if (cfg.model) q('#llmModel').value = cfg.model;
+      if (cfg.key) q('#llmKey').value = cfg.key;
+      if (cfg.base) q('#llmBase').value = cfg.base;
+      onLLMChange();
+    }
+  } catch {}
+}
+
+initTheme();
+loadConfigFromServer();
+loadIndustries();
+loadCities();
+loadHistory();
+loadRecentJobs();
+initPublicJobs();
+initViewTabs();
+
+// ========== 主题切换 ==========
+function initTheme() {
+  const stored = (() => {
+    try { return localStorage.getItem('theme.name') || 'bulletin'; }
+    catch { return 'bulletin'; }
+  })();
+  applyTheme(stored);
+  const sw = document.getElementById('themeSwitch');
+  if (sw) {
+    sw.addEventListener('click', e => {
+      const sp = e.target.closest('.theme-swatch[data-key]');
+      if (!sp) return;
+      applyTheme(sp.dataset.key);
+    });
+  }
+}
+
+function applyTheme(name) {
+  const valid = ['bulletin', 'terminal', 'minimal', 'dusk', 'azure'];
+  if (!valid.includes(name)) name = 'bulletin';
+  if (name === 'bulletin') {
+    document.documentElement.removeAttribute('data-theme');
+  } else {
+    document.documentElement.setAttribute('data-theme', name);
+  }
+  try { localStorage.setItem('theme.name', name); } catch {}
+  // 同步 active 高亮
+  document.querySelectorAll('.theme-swatch[data-key]').forEach(sp => {
+    sp.classList.toggle('active', sp.dataset.key === name);
+  });
+}
+
+// ========== 顶层视图切换 ==========
+function switchMainView(name) {
+  const tabs = qa('.view-tab');
+  const views = qa('.main-view');
+  views.forEach(v => {
+    const on = v.dataset.view === name;
+    v.hidden = !on;
+  });
+  tabs.forEach(t => {
+    const on = t.dataset.view === name;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  _movePill(name);
+  // 切换到公开岗位时，若还没拉过数据，自动拉一次（轻量首屏）
+  if (name === 'public' && !pjItems.length && !q('#pjRefreshBtn')?.disabled) {
+    refreshPublicJobs();
+  }
+}
+
+function _movePill(name) {
+  const pill = q('#vtPill');
+  const tab = document.querySelector(`.view-tab[data-view="${name}"]`);
+  if (!pill || !tab) return;
+  const parent = pill.parentElement.getBoundingClientRect();
+  const r = tab.getBoundingClientRect();
+  pill.style.width = r.width + 'px';
+  pill.style.transform = `translateX(${r.left - parent.left - 4}px)`;
+}
+
+function initViewTabs() {
+  // 初次定位 + 字体加载后重定位 + resize 时跟随
+  requestAnimationFrame(() => _movePill('apply'));
+  window.addEventListener('resize', () => {
+    const cur = document.querySelector('.view-tab.active')?.dataset.view || 'apply';
+    _movePill(cur);
+  });
+}
+
+// ========== 其他公开岗位 ==========
+const PUBLIC_JOB_LOGOS = {
+  // key → {bg, label, sub}
+  sasac:     { bg: '#c43838', label: 'SASAC', sub: '国家发布' },
+  mohrss:    { bg: '#a52828', label: '人社部', sub: '国家发布' },
+  company:   { bg: '#5d7cff', label: '官网',  sub: '官方发布' },
+  huawei:    { bg: '#cf0a2c', label: 'hu',    sub: '企业官网' },
+  wechat:    { bg: '#10b981', label: '微信',  sub: '官方发布' },
+  guoping:   { bg: '#dc2626', label: '国聘',  sub: '求职平台' },
+  regional:  { bg: '#0ea5e9', label: '人才',  sub: '地方人才' },
+  shixiseng: { bg: '#f97316', label: '实习',  sub: '求职平台' },
+  extra:     { bg: '#8b5cf6', label: '更多',  sub: '更多渠道' },
+  websearch: { bg: '#1a1814', label: '🔍',    sub: '联网检索' },
+};
+let pjSources = [];        // [{key, name, category, enabled}]
+let pjEnabled = new Set(); // 用户在前端勾选的 key
+let pjItems = [];
+let pjPerSource = {};      // key → count after last refresh
+let pjPerSourceRaw = {};   // key → raw (pre-filter) count after last refresh
+let pjErrors = {};         // key → error message after last refresh
+let pjSkipped = {};        // key → skip reason (e.g. "需要关键词") after last refresh
+let pjSelectedCities = []; // 多选城市（跨省累计）
+let pjSelectedProvince = ''; // 城市级联当前选中的"省份/分组"，'' = 默认显示热门城市
+let pjSelectedIndustry = ''; // 当前选中的行业大类名（与 INDUSTRIES 的 key 对齐）
+let pjSelectedJobs = [];   // 用户在岗位面板里勾选的具体岗位（多选）
+let pjSelectedEdus = [];   // 学历多选（"不限"=匹配所有；任一命中即保留）
+let pjPage = 1;            // 当前分页页码
+const PJ_PAGE_SIZE = 20;   // 每页条数
+const PJ_EDU_OPTIONS = ['不限', '大专', '本科', '硕士', '博士'];
+let pjSelectedDate = ''; // '' / '1d' / '7d' / '30d' / '90d'
+const PJ_DATE_OPTIONS = [
+  { key: '',     label: '全部' },
+  { key: '1d',   label: '近 24 小时' },
+  { key: '7d',   label: '近 7 天' },
+  { key: '30d',  label: '近 30 天' },
+  { key: '90d',  label: '近 90 天' },
+];
+let pjSelectedCorp = ''; // '' / 'soe' / 'private' / 'gov'
+const PJ_CORP_OPTIONS = [
+  { key: '',        label: '全部',     kw: '' },
+  { key: 'soe',     label: '国企央企', kw: '国企 央企' },
+  { key: 'private', label: '民企',     kw: '民企' },
+  { key: 'gov',     label: '政府事业', kw: '事业单位 公务员' },
+];
+// 已投递标记 — 持久化到 localStorage（按岗位 id 索引）
+let pjAppliedIds = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem('pj.applied') || '[]')); }
+  catch { return new Set(); }
+})();
+function pjSaveApplied() {
+  try {
+    let arr = [...pjAppliedIds];
+    if (arr.length > 1000) arr = arr.slice(-1000);
+    pjAppliedIds = new Set(arr);
+    localStorage.setItem('pj.applied', JSON.stringify(arr));
+  } catch {}
+}
+
+// LLM 智能补全结果（按 id 缓存到内存；server 端也缓存，刷新页面会重拉）
+let pjEnriched = {};   // {id: {deadline?, location?, education?, experience?, salary?}}
+let pjScores = {};     // {id: {score, reason}}
+let pjSortByScore = false; // 是否按匹配分降序排
+let pjPrefs = (() => {
+  try { return localStorage.getItem('pj.prefs') || ''; } catch { return ''; }
+})();
+
+function pjOpenPrefsModal() {
+  const mask = q('#pjPrefsMask');
+  const ta = q('#pjPrefsInput');
+  if (!mask || !ta) return;
+  ta.value = pjPrefs || '';
+  mask.classList.add('open');
+  setTimeout(() => ta.focus(), 50);
+}
+function pjClosePrefsModal() {
+  q('#pjPrefsMask')?.classList.remove('open');
+}
+function pjSavePrefs() {
+  const ta = q('#pjPrefsInput');
+  if (!ta) return;
+  const had = !!pjPrefs;
+  pjPrefs = ta.value.trim();
+  try { localStorage.setItem('pj.prefs', pjPrefs); } catch {}
+  pjClosePrefsModal();
+  if (!pjPrefs) {
+    toast('偏好已清空', 'ok');
+    return;
+  }
+  // 保存后自动跑一次评分（不论首次或修改）
+  toast(had ? '偏好已更新 — 自动重新评分中…' : '偏好已保存 — 自动开始评分…', 'ok');
+  pjScoreVisible({ _autoFromSave: true });
+}
+
+function pjToggleScoreSort() {
+  pjSortByScore = !pjSortByScore;
+  const th = q('#pjScoreTh');
+  if (th) th.classList.toggle('sort-on', pjSortByScore);
+  pjPage = 1;
+  renderPjTable();
+  toast(pjSortByScore ? '已按匹配分降序' : '已恢复默认顺序', 'ok');
+}
+
+// 取得渲染时的「有效字段」：原始字段 || LLM 补全字段
+function pjEffective(it) {
+  const e = pjEnriched[it.id] || {};
+  return {
+    location:   it.location   || e.location   || null,
+    education:  it.education  || e.education  || null,
+    experience: it.experience || e.experience || null,
+    deadline:   pjExtractDeadline(it) || e.deadline || '',
+    salary:     e.salary || null,
+    // 标记每个字段是否来自 LLM（前端给底纹用）
+    _src: {
+      location:   !it.location   && !!e.location,
+      education:  !it.education  && !!e.education,
+      deadline:   !pjExtractDeadline(it) && !!e.deadline,
+    },
+  };
+}
+
+async function pjCallLLM(endpoint, body, btnSel, runningLabel) {
+  // 当用户关掉 "✨ LLM 富化" 时，禁止任何走 llm_enrich 的请求（双保险，防止服务端仍回未富化条目时浪费 token）
+  // ⚠ 评分接口 llm_score 不受影响 —— 那是用户主动点 ⭐ 触发的，属于显式动作
+  if (typeof endpoint === 'string' && endpoint.includes('llm_enrich')) {
+    if (!document.getElementById('pjEnrichToggle')?.checked) return null;
+  }
+  const btn = q(btnSel);
+  const oldLabel = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = runningLabel; }
+  try {
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (d.error) {
+      toast('LLM 失败: ' + d.error, 'err', 6000);
+      return null;
+    }
+    return d;
+  } catch (e) {
+    toast('请求失败: ' + e.message, 'err');
+    return null;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = oldLabel; }
+  }
+}
+
+// 取当前可见页的岗位（过滤+分页后实际渲染的那批）
+function pjCurrentVisible() {
+  // 复用 renderPjTable 的过滤链 — 这里直接重算一遍
+  let items = pjItems;
+  if (pjSelectedJobs.length) {
+    const kws = [...new Set(pjSelectedJobs.flatMap(j => {
+      const s = j.replace(/[(（].*?[)）]/g, '').trim();
+      const out = [s];
+      if (s.length > 3) out.push(s.slice(0, Math.min(4, s.length)));
+      return out;
+    }))];
+    const re = new RegExp(kws.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'i');
+    const BULLETIN_SRC = /(mohrss|sasac|guoping|iguopin|wechat|rsshub|gov)/i;
+    items = items.filter(it => {
+      if (BULLETIN_SRC.test(it.source || '')) return true;
+      return re.test(it.title || '') || re.test(it.summary || '') || re.test(it.company || '');
+    });
+  }
+  if (pjSelectedCities.length) {
+    items = items.filter(it => {
+      const loc = (it.location || '').trim();
+      if (!loc) return true;
+      const locN = loc.replace(/市/g, '');
+      return pjSelectedCities.some(c => locN.includes(c.replace(/市/g, '')));
+    });
+  }
+  if (pjSelectedEdus.length) {
+    const wantUnlimit = pjSelectedEdus.includes('不限');
+    items = items.filter(it => {
+      const edu = (it.education || '').trim();
+      if (!edu) return true;
+      if (wantUnlimit && /不限/.test(edu)) return true;
+      return pjSelectedEdus.some(e => e !== '不限' && edu.includes(e));
+    });
+  }
+  if (pjSelectedDate) {
+    const days = { '1d': 1, '7d': 7, '30d': 30, '90d': 90 }[pjSelectedDate];
+    if (days) {
+      const cutoff = Date.now() - days * 86400_000;
+      items = items.filter(it => {
+        const t = it.publish_time;
+        if (!t) return false;
+        const ts = Date.parse(t.replace(' ', 'T'));
+        return !Number.isNaN(ts) && ts >= cutoff;
+      });
+    }
+  }
+  if (pjSelectedCorp) items = items.filter(pjCorpMatch);
+  // 只对当前页的条目做 LLM 调用 — 不然花费太大
+  const start = (pjPage - 1) * PJ_PAGE_SIZE;
+  return items.slice(start, start + PJ_PAGE_SIZE);
+}
+
+// 单条懒富集：用户点 ↗ 打开详情时，对"缺字段且未补过"的条目后台跑 LLM。
+// 关键：不阻塞 target=_blank 跳转，不打扰其他行，结果回来悄悄合进 pjEnriched 并重绘。
+const pjEnrichInFlight = new Set();
+
+function pjItemNeedsEnrich(it) {
+  if (!it) return false;
+  // 已经在 pjEnriched 里有任何字段 → 视为已补过，不再重复跑
+  const e = pjEnriched[it.id];
+  if (e && (e.location || e.education || e.experience || e.deadline || e.salary)) return false;
+  // 缺关键字段才补：location/education/deadline 任一为空就值得跑一次
+  const missing = !it.location || !it.education || !pjExtractDeadline(it);
+  return missing;
+}
+
+async function pjMaybeEnrichOne(id) {
+  // ✨ LLM 富化开关关掉时，单条懒富集也跳过 —— 不偷偷烧 token
+  if (!document.getElementById('pjEnrichToggle')?.checked) return;
+  const it = pjItems.find(x => x.id === id);
+  if (!it) return;
+  if (pjEnrichInFlight.has(id)) return; // 同条已在跑
+  if (!pjItemNeedsEnrich(it)) return;
+  pjEnrichInFlight.add(id);
+  try {
+    const r = await fetch('/api/public_jobs/llm_enrich', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: [{
+        id: it.id, title: it.title, company: it.company,
+        summary: it.summary, location: it.location,
+        education: it.education, experience: it.experience,
+        publish_time: it.publish_time, apply_url: it.apply_url,
+      }] }),
+    });
+    const d = await r.json();
+    if (d && d.results && d.results[id]) {
+      pjEnriched[id] = d.results[id];
+      renderPjTable();
+    }
+  } catch (e) {
+    // 静默失败 —— 用户主流程是看招聘原文，不应被弹窗打扰
+    console.warn('[pjMaybeEnrichOne]', e);
+  } finally {
+    pjEnrichInFlight.delete(id);
+  }
+}
+
+async function pjEnrichVisible() {
+  const visible = pjCurrentVisible();
+  if (!visible.length) {
+    toast('当前页没有岗位 — 先点 🔄 抓取', 'warn');
+    return;
+  }
+  const payload = visible.map(it => ({
+    id: it.id, title: it.title, company: it.company,
+    summary: it.summary, location: it.location,
+    education: it.education, experience: it.experience,
+    publish_time: it.publish_time,
+  }));
+  toast(`🤖 LLM 智能补全 ${visible.length} 条中…`, 'info');
+  const d = await pjCallLLM('/api/public_jobs/llm_enrich', { items: payload },
+                             '#pjEnrichBtn', '补全中…');
+  if (!d) return;
+  Object.assign(pjEnriched, d.results || {});
+  const filled = Object.values(d.results || {}).filter(r =>
+    r && (r.deadline || r.location || r.education || r.experience || r.salary)
+  ).length;
+  toast(`✓ 已补全 ${filled}/${visible.length} 条（缓存命中 ${d.cached || 0} 条）`, 'ok');
+  renderPjTable();
+}
+
+async function pjScoreVisible(ev) {
+  // Shift-点击 → 重新编辑偏好；首次（无偏好）也走编辑入口
+  if (ev && ev.shiftKey) {
+    pjOpenPrefsModal();
+    return;
+  }
+  if (!pjPrefs.trim()) {
+    toast('请先写明你的求职偏好', 'info');
+    pjOpenPrefsModal();
+    return;
+  }
+  const visible = pjCurrentVisible();
+  if (!visible.length) {
+    toast('当前页没有岗位 — 先点 🔄 抓取', 'warn');
+    return;
+  }
+  const payload = visible.map(it => ({
+    id: it.id, title: it.title, company: it.company,
+    summary: it.summary, publish_time: it.publish_time,
+    location: it.location, education: it.education,
+    experience: it.experience,
+  }));
+  toast(`⭐ LLM 匹配评分 ${visible.length} 条中…`, 'info');
+  const d = await pjCallLLM('/api/public_jobs/llm_score',
+                             { items: payload, prefs: pjPrefs },
+                             '#pjScoreBtn', '评分中…');
+  if (!d) return;
+  Object.assign(pjScores, d.results || {});
+  const scored = Object.values(d.results || {}).filter(r => r && typeof r.score === 'number').length;
+  toast(`✓ 已评 ${scored}/${visible.length} 条 — 点表头「匹配」按分数排序`, 'ok');
+  renderPjTable();
+}
+
+async function initPublicJobs() {
+  // 等行业 + 城市数据齐了再填下拉。已在主流程被 loadIndustries/loadCities 触发。
+  pjFillIndustryAndCities();
+  pjRenderEduList();
+  pjRenderDateList();
+  pjRenderCorpList();
+  // ✨ LLM 富化开关：从 localStorage 恢复（默认 ON）
+  pjRestoreEnrichToggle();
+  await pjReloadSources();
+}
+
+// ===== ✨ LLM 富化 开关：持久化 + 提示可见性 =====
+function pjRestoreEnrichToggle() {
+  const cb = document.getElementById('pjEnrichToggle');
+  if (!cb) return;
+  try {
+    const saved = localStorage.getItem('pj.enrich');
+    // 缺省值 = ON；只在显式存了 "false" 时关闭
+    cb.checked = (saved === null || saved === undefined) ? true : (saved !== 'false');
+  } catch { cb.checked = true; }
+  pjSyncEnrichHint();
+}
+function pjOnEnrichToggleChange() {
+  const cb = document.getElementById('pjEnrichToggle');
+  if (!cb) return;
+  try { localStorage.setItem('pj.enrich', cb.checked ? 'true' : 'false'); } catch {}
+  pjSyncEnrichHint();
+}
+function pjSyncEnrichHint() {
+  const cb = document.getElementById('pjEnrichToggle');
+  const hint = document.getElementById('pjEnrichCostHint');
+  if (!hint || !cb) return;
+  hint.classList.toggle('hidden', !cb.checked);
+}
+
+async function pjReloadSources() {
+  try {
+    const r = await fetch('/api/public_jobs/sources');
+    const d = await r.json();
+    pjSources = d.sources || [];
+    // 默认勾选：仅非公告类源（bulletin=true 的需要用户主动启用，否则会拉一堆和关键词无关的政策公告）
+    pjEnabled = new Set(pjSources.filter(s => s.enabled && !s.bulletin).map(s => s.key));
+    try {
+      const saved = JSON.parse(localStorage.getItem('pj.enabled') || 'null');
+      if (Array.isArray(saved)) pjEnabled = new Set(saved);
+    } catch {}
+    renderPjSources();
+  } catch (e) {
+    console.warn('载入公开岗位源失败', e);
+  }
+}
+
+function pjFillIndustryAndCities() {
+  // 级联下拉的左侧：行业列表 —— 依赖 INDUSTRIES（由 loadIndustries 填充）
+  let tries = 0;
+  const fillIndustry = () => {
+    const ul = q('#pjIndustryList');
+    if (!ul) return;
+    const ready = INDUSTRIES && Object.keys(INDUSTRIES).length;
+    if (!ready) {
+      if (++tries < 30) setTimeout(fillIndustry, 150);
+      return;
+    }
+    if (ul.children.length) return; // 已填过
+    const rows = Object.keys(INDUSTRIES).map(name => {
+      const n = (INDUSTRIES[name] || []).length;
+      return `<li data-industry="${esc(name)}" onclick="pjPickIndustry(this, event)">
+        <span>${esc(name)}</span>
+        <span class="ind-count">${n}</span>
+      </li>`;
+    }).join('');
+    ul.innerHTML = rows;
+    pjUpdateIndustryLabel();
+  };
+  fillIndustry();
+
+  // 城市面板：等 CITY_DATA 齐
+  let tries2 = 0;
+  const fillCity = () => {
+    const wrap = q('#pjProvinceList');
+    if (!wrap) return;
+    const cd = (typeof CITY_DATA !== 'undefined') ? CITY_DATA : null;
+    const ready = cd && ((cd.hot && cd.hot.length) ||
+                         (cd.provinces && Object.keys(cd.provinces).length));
+    if (!ready) {
+      if (++tries2 < 30) setTimeout(fillCity, 150);
+      return;
+    }
+    if (wrap.children.length > 0) return;
+    pjRenderProvinceList();
+    pjRenderCityPanel();
+    pjRenderCitySelected();
+  };
+  fillCity();
+}
+
+// ── 城市级联（左：省份 → 右：城市，跨省累计） ──
+// 左侧省份列表：第一项固定"热门城市"，其余按 CITY_DATA.provinces 顺序
+function pjRenderProvinceList() {
+  const ul = q('#pjProvinceList');
+  if (!ul) return;
+  const cd = CITY_DATA || { hot: [], provinces: {} };
+  const rows = [];
+  // "热门城市"作为默认分组，name='' 表示默认态
+  const hotCnt = (cd.hot || []).length;
+  rows.push(`<li data-province="" class="${pjSelectedProvince === '' ? 'active' : ''}" onclick="pjPickProvince(this, event)">
+    <span>热门城市</span><span class="ind-count">${hotCnt}</span>
+  </li>`);
+  for (const [prov, list] of Object.entries(cd.provinces || {})) {
+    const n = (list || []).length;
+    if (!n) continue;
+    rows.push(`<li data-province="${esc(prov)}" class="${pjSelectedProvince === prov ? 'active' : ''}" onclick="pjPickProvince(this, event)">
+      <span>${esc(prov)}</span><span class="ind-count">${n}</span>
+    </li>`);
+  }
+  ul.innerHTML = rows.join('');
+}
+
+// 右侧：当前省份的城市 pill 列表
+function pjRenderCityPanel() {
+  const wrap = q('#pjCityProvinces');
+  if (!wrap) return;
+  const cd = CITY_DATA || { hot: [], provinces: {} };
+  const list = pjSelectedProvince
+    ? (cd.provinces?.[pjSelectedProvince] || [])
+    : (cd.hot || []);
+  if (!list.length) {
+    wrap.innerHTML = `<span style="color:var(--text-muted);font-size:11.5px;padding:4px">该分组暂无城市</span>`;
+    return;
+  }
+  wrap.innerHTML = list.map(c => {
+    const active = pjSelectedCities.includes(c);
+    return `<span class="pj-job-pill ${active?'active':''}" data-city="${esc(c)}" onclick="pjToggleCity(this, event)">${esc(c)}</span>`;
+  }).join('');
+  // 切省时清空右侧搜索框
+  const s = q('#pjCitySearch');
+  if (s) s.value = '';
+}
+
+function pjPickProvince(el, ev) {
+  ev && ev.stopPropagation && ev.stopPropagation();
+  const name = el.dataset.province || '';
+  if (pjSelectedProvince === name) return;
+  pjSelectedProvince = name;
+  q('#pjProvinceList').querySelectorAll('li').forEach(li => {
+    li.classList.toggle('active', (li.dataset.province || '') === name);
+  });
+  pjRenderCityPanel();
+  pjUpdateProvinceLabel();
+}
+
+function pjFilterProvinces() {
+  const kw = ((q('#pjProvinceSearch') || {}).value || '').trim().toLowerCase();
+  q('#pjProvinceList').querySelectorAll('li').forEach(li => {
+    const n = (li.dataset.province || '').toLowerCase();
+    // 空 dataset（"热门城市"）始终保留
+    const showHot = !li.dataset.province;
+    li.classList.toggle('hidden', kw && !showHot && !n.includes(kw));
+  });
+}
+
+function pjUpdateProvinceLabel() {
+  const lab = q('#pjProvinceLabel');
+  if (!lab) return;
+  lab.textContent = pjSelectedProvince || '省·城市';
+}
+
+function pjRenderCitySelected() {
+  const cnt = q('#pjCityCount');
+  if (!cnt) return;
+  const n = pjSelectedCities.length;
+  const label = n === 0 ? '全部' : (n === 1 ? pjSelectedCities[0] : `${pjSelectedCities[0]} +${n - 1}`);
+  cnt.textContent = label;
+  cnt.classList.toggle('empty', n === 0);
+}
+
+function pjToggleCity(elOrStr, ev) {
+  ev && ev.stopPropagation && ev.stopPropagation();
+  let el = elOrStr, city;
+  if (typeof elOrStr === 'string') {
+    city = elOrStr;
+    el = q(`#pjCityProvinces .pj-job-pill[data-city="${CSS.escape(city)}"]`);
+  } else {
+    city = el.dataset.city;
+  }
+  const i = pjSelectedCities.indexOf(city);
+  if (i >= 0) { pjSelectedCities.splice(i, 1); el && el.classList.remove('active'); }
+  else { pjSelectedCities.push(city); el && el.classList.add('active'); }
+  pjRenderCitySelected();
+  renderPjTable(); // 实时筛选已展示表格
+}
+
+function pjSelectAllCities(checked) {
+  const pills = [...q('#pjCityProvinces').querySelectorAll('.pj-job-pill:not(.hidden)')];
+  if (!pills.length) return;
+  const targets = pills.map(el => el.dataset.city);
+  if (checked) {
+    targets.forEach(c => { if (!pjSelectedCities.includes(c)) pjSelectedCities.push(c); });
+  } else {
+    pjSelectedCities = pjSelectedCities.filter(c => !targets.includes(c));
+  }
+  pills.forEach(el => el.classList.toggle('active', checked));
+  pjRenderCitySelected();
+  renderPjTable();
+}
+
+function pjInvertCities() {
+  const pills = [...q('#pjCityProvinces').querySelectorAll('.pj-job-pill:not(.hidden)')];
+  if (!pills.length) return;
+  pills.forEach(el => {
+    const c = el.dataset.city;
+    const i = pjSelectedCities.indexOf(c);
+    if (i >= 0) { pjSelectedCities.splice(i, 1); el.classList.remove('active'); }
+    else { pjSelectedCities.push(c); el.classList.add('active'); }
+  });
+  pjRenderCitySelected();
+  renderPjTable();
+}
+
+// 收起除 keepId 之外的所有筛选弹层
+function pjCloseOtherPopovers(keepId) {
+  ['pjJobsWrap', 'pjEduWrap', 'pjDateWrap'].forEach(id => {
+    if (id !== keepId) q('#' + id)?.classList.remove('open');
+  });
+  if (keepId !== 'pjCityCombo') q('#pjCityCombo')?.classList.remove('open');
+}
+
+function pjOpenCityPanel(ev) {
+  ev && ev.stopPropagation();
+  const combo = q('#pjCityCombo');
+  if (!combo) return;
+  const willOpen = !combo.classList.contains('open');
+  if (willOpen) pjCloseOtherPopovers('pjCityCombo');
+  combo.classList.toggle('open');
+  // 打开时聚焦：未选省则聚焦左侧搜省，已选则聚焦右侧搜城市
+  if (combo.classList.contains('open')) {
+    setTimeout(() => {
+      const t = pjSelectedProvince ? q('#pjCitySearch') : q('#pjProvinceSearch');
+      if (t) t.focus();
+    }, 0);
+  }
+}
+
+function pjFilterCities() {
+  const kw = ((q('#pjCitySearch') || {}).value || '').trim().toLowerCase();
+  q('#pjCityProvinces').querySelectorAll('.pj-job-pill').forEach(el => {
+    const c = (el.dataset.city || '').toLowerCase();
+    el.classList.toggle('hidden', kw && !c.includes(kw));
+  });
+}
+
+// L13: 公开岗位区域统一 document click 委托（合并 6 个监听器 → 1 个）
+document.addEventListener('click', e => {
+  // ── 点空白处关闭弹出面板 ──
+  const pjCity = q('#pjCityCombo');
+  if (pjCity && !pjCity.contains(e.target)) pjCity.classList.remove('open');
+  const wrap = q('#pjJobsWrap');
+  if (wrap && !wrap.contains(e.target)) wrap.classList.remove('open');
+  const ew = q('#pjEduWrap');
+  if (ew && !ew.contains(e.target)) ew.classList.remove('open');
+  const dw = q('#pjDateWrap');
+  if (dw && !dw.contains(e.target)) dw.classList.remove('open');
+
+  // ── 委托: 学历多选 ──
+  const eduRow = e.target.closest('#pjEduList .pj-edu-row[data-edu]');
+  if (eduRow) { e.stopPropagation(); pjToggleEdu_(eduRow.dataset.edu); return; }
+
+  // ── 委托: 日期单选 ──
+  const dateRow = e.target.closest('#pjDateList .pj-edu-row[data-dkey]');
+  if (dateRow) {
+    e.stopPropagation();
+    pjSelectedDate = dateRow.dataset.dkey || '';
+    pjRenderDateList();
+    q('#pjDateWrap')?.classList.remove('open');
+    pjPage = 1; renderPjTable();
+    return;
+  }
+
+  // ── 委托: 公司性质单选 ──
+  const corpRow = e.target.closest('#pjCorpList .pj-edu-row[data-corpkey]');
+  if (corpRow) {
+    e.stopPropagation();
+    pjSelectedCorp = corpRow.dataset.corpkey || '';
+    pjRenderCorpList();
+    q('#pjCorpWrap')?.classList.remove('open');
+    pjPage = 1; renderPjTable();
+    return;
+  }
+
+  // ── 委托: 已投递切换 ──
+  const appliedBtn = e.target.closest('[data-toggle-applied]');
+  if (appliedBtn) {
+    e.stopPropagation();
+    const id = appliedBtn.dataset.toggleApplied;
+    if (!id) return;
+    if (pjAppliedIds.has(id)) pjAppliedIds.delete(id);
+    else pjAppliedIds.add(id);
+    pjSaveApplied();
+    renderPjTable();
+    return;
+  }
+});
+
+// 级联下拉：点左侧行业 → 切换右侧岗位列表
+function pjPickIndustry(el, ev) {
+  ev && ev.stopPropagation && ev.stopPropagation();
+  const name = el.dataset.industry || '';
+  if (pjSelectedIndustry === name) return;
+  pjSelectedIndustry = name;
+  pjSelectedJobs = []; // 换了行业，岗位选择清空
+  // 同步左侧高亮（不重渲染整个 UL，避免抖动）
+  q('#pjIndustryList').querySelectorAll('li').forEach(li => {
+    li.classList.toggle('active', li.dataset.industry === name);
+  });
+  pjRenderJobsList();
+  pjUpdateJobsCount();
+  pjUpdateIndustryLabel();
+}
+
+function pjFilterIndustries() {
+  const kw = ((q('#pjIndustrySearch') || {}).value || '').trim().toLowerCase();
+  q('#pjIndustryList').querySelectorAll('li').forEach(li => {
+    const n = (li.dataset.industry || '').toLowerCase();
+    li.classList.toggle('hidden', kw && !n.includes(kw));
+  });
+}
+
+function pjUpdateIndustryLabel() {
+  const lab = q('#pjIndustryLabel');
+  if (!lab) return;
+  lab.textContent = pjSelectedIndustry || '行业·岗位';
+  lab.style.color = pjSelectedIndustry ? 'var(--text-bright)' : 'var(--text-muted)';
+}
+
+// 兼容旧调用入口（refresh / 配置加载时还有几处会调）
+function onPjIndustryChange() {
+  // 现在没有 <select> 了 —— 只刷新右侧 + label
+  pjRenderJobsList();
+  pjUpdateJobsCount();
+  pjUpdateIndustryLabel();
+}
+
+function pjRenderJobsList() {
+  const list = q('#pjJobsList');
+  if (!list) return;
+  const jobs = (pjSelectedIndustry && INDUSTRIES[pjSelectedIndustry]) || [];
+  if (!jobs.length) {
+    const msg = pjSelectedIndustry ? '该行业暂无岗位' : '请先在左侧选择行业';
+    list.innerHTML = `<span style="color:var(--text-muted);font-size:11.5px;padding:4px">${msg}</span>`;
+    return;
+  }
+  // 渲染一次后，toggle 只改 class，不重建 DOM —— 保留滚动位置 + 不丢搜索过滤
+  // 用 <span> 而非 <label>（label 在没有关联控件时也会触发奇怪的事件合成路径，
+  //  历史上有用户反馈"点了一下就把面板收起了"，根因不明，换 span 直接绕开）
+  list.innerHTML = jobs.map(job => {
+    const active = pjSelectedJobs.includes(job);
+    return `<span class="pj-job-pill ${active?'active':''}" data-job="${esc(job)}" onclick="pjToggleJob(this, event)">${esc(job)}</span>`;
+  }).join('');
+  // 切行业时清空搜索框
+  const s = q('#pjJobsSearch');
+  if (s) s.value = '';
+}
+
+function pjToggleJob(el, ev) {
+  // 阻止冒泡 —— 任何"点空白处关闭面板"的 document 监听器都需要 e.target 在 wrap 外
+  // 才会关闭；冒泡到 document 不会关闭自己的 wrap，但显式 stop 一下更稳，且能避免
+  // 同时触发其他 popover 的关闭/重新打开
+  ev && ev.stopPropagation && ev.stopPropagation();
+  const job = el.dataset ? el.dataset.job : el; // 兼容老调用方式（传字符串）
+  if (typeof el === 'string') {
+    el = q(`#pjJobsList .pj-job-pill[data-job="${CSS.escape(el)}"]`);
+  }
+  const i = pjSelectedJobs.indexOf(job);
+  if (i >= 0) { pjSelectedJobs.splice(i, 1); el && el.classList.remove('active'); }
+  else { pjSelectedJobs.push(job); el && el.classList.add('active'); }
+  pjUpdateJobsCount();
+  // 不调用 renderPjTable() —— 选择 pill 只影响"下次抓取"的关键词，不影响已抓数据。
+  // 之前每点一次就 renderPjTable 一次，几百行表格反复重建，视觉上像"卡了一下"，
+  // 部分用户会误以为"面板被关掉了"。
+}
+
+function pjSelectAllJobs(checked) {
+  // 有搜索过滤时只作用于可见项；无过滤时作用于全部
+  const pills = [...q('#pjJobsList').querySelectorAll('.pj-job-pill:not(.hidden)')];
+  if (!pills.length) return;
+  const targets = pills.map(el => el.dataset.job);
+  if (checked) {
+    targets.forEach(j => { if (!pjSelectedJobs.includes(j)) pjSelectedJobs.push(j); });
+  } else {
+    pjSelectedJobs = pjSelectedJobs.filter(j => !targets.includes(j));
+  }
+  pills.forEach(el => el.classList.toggle('active', checked));
+  pjUpdateJobsCount();
+}
+
+function pjInvertJobs() {
+  const pills = [...q('#pjJobsList').querySelectorAll('.pj-job-pill:not(.hidden)')];
+  if (!pills.length) return;
+  pills.forEach(el => {
+    const job = el.dataset.job;
+    const i = pjSelectedJobs.indexOf(job);
+    if (i >= 0) { pjSelectedJobs.splice(i, 1); el.classList.remove('active'); }
+    else { pjSelectedJobs.push(job); el.classList.add('active'); }
+  });
+  pjUpdateJobsCount();
+}
+
+function pjFilterJobs() {
+  const kw = ((q('#pjJobsSearch') || {}).value || '').trim().toLowerCase();
+  q('#pjJobsList').querySelectorAll('.pj-job-pill').forEach(el => {
+    const j = (el.dataset.job || '').toLowerCase();
+    el.classList.toggle('hidden', kw && !j.includes(kw));
+  });
+}
+
+function pjUpdateJobsCount() {
+  const cnt = q('#pjJobsCount');
+  if (!cnt) return;
+  const n = pjSelectedJobs.length;
+  if (n === 0) { cnt.textContent = '(0)'; return; }
+  if (n === 1) { cnt.textContent = `(${pjSelectedJobs[0]})`; return; }
+  // 多选时显示首个 + 余数：(Python开发 +3)
+  cnt.textContent = `(${pjSelectedJobs[0]} +${n - 1})`;
+}
+
+function pjToggleJobs(ev) {
+  ev && ev.stopPropagation();
+  const wrap = q('#pjJobsWrap');
+  if (!wrap) return;
+  if (!wrap.classList.contains('open')) pjCloseOtherPopovers('pjJobsWrap');
+  wrap.classList.toggle('open');
+  // 打开时聚焦：未选行业先聚焦左侧搜索；已选行业聚焦右侧岗位搜索
+  if (wrap.classList.contains('open')) {
+    setTimeout(() => {
+      const target = pjSelectedIndustry ? q('#pjJobsSearch') : q('#pjIndustrySearch');
+      if (target) target.focus();
+    }, 0);
+  }
+}
+
+// ===== 学历多选 =====
+// 不用 <label><input> 结构 —— label→input 合成 click 会让一次点击触发两次切换
+// （前一版的"点不动、必须先清空"就是这个坑）。用纯 div + ✓ 字符做视觉态。
+function pjRenderEduList() {
+  const list = q('#pjEduList');
+  if (!list) return;
+  list.innerHTML = PJ_EDU_OPTIONS.map(e => {
+    const active = pjSelectedEdus.includes(e);
+    return `<div class="pj-edu-row ${active ? 'active' : ''}" data-edu="${esc(e)}">
+      <span class="pj-edu-check">${active ? '✓' : ''}</span>
+      <span>${esc(e)}</span>
+    </div>`;
+  }).join('');
+  pjUpdateEduCount();
+}
+
+function pjToggleEdu_(v) {
+  const i = pjSelectedEdus.indexOf(v);
+  if (i >= 0) pjSelectedEdus.splice(i, 1);
+  else pjSelectedEdus.push(v);
+  pjRenderEduList();
+  pjPage = 1;
+  renderPjTable();
+}
+
+function pjClearEdu() {
+  pjSelectedEdus = [];
+  pjRenderEduList();
+  pjPage = 1;
+  renderPjTable();
+}
+
+function pjUpdateEduCount() {
+  const cnt = q('#pjEduCount');
+  if (!cnt) return;
+  if (pjSelectedEdus.length) {
+    cnt.textContent = pjSelectedEdus.length === 1
+      ? pjSelectedEdus[0]
+      : `${pjSelectedEdus.length} 项`;
+    cnt.classList.remove('empty');
+  } else {
+    cnt.textContent = '全部';
+    cnt.classList.add('empty');
+  }
+}
+
+function pjToggleEdu(ev) {
+  ev && ev.stopPropagation();
+  const wrap = q('#pjEduWrap');
+  if (!wrap) return;
+  if (!wrap.classList.contains('open')) {
+    pjCloseOtherPopovers('pjEduWrap');
+    pjRenderEduList();
+  }
+  wrap.classList.toggle('open');
+}
+
+// ===== 发布时间筛选（单选） =====
+function pjRenderDateList() {
+  const list = q('#pjDateList');
+  if (!list) return;
+  list.innerHTML = PJ_DATE_OPTIONS.map(o => {
+    const active = pjSelectedDate === o.key;
+    return `<div class="pj-edu-row ${active ? 'active' : ''}" data-dkey="${esc(o.key)}">
+      <span class="pj-edu-check">${active ? '✓' : ''}</span>
+      <span>${esc(o.label)}</span>
+    </div>`;
+  }).join('');
+  pjUpdateDateCount();
+}
+
+function pjUpdateDateCount() {
+  const cnt = q('#pjDateCount');
+  if (!cnt) return;
+  const o = PJ_DATE_OPTIONS.find(x => x.key === pjSelectedDate);
+  cnt.textContent = (o && o.label) || '全部';
+  cnt.classList.toggle('empty', !pjSelectedDate);
+}
+
+function pjToggleDate(ev) {
+  ev && ev.stopPropagation();
+  const wrap = q('#pjDateWrap');
+  if (!wrap) return;
+  if (!wrap.classList.contains('open')) {
+    pjCloseOtherPopovers('pjDateWrap');
+    pjRenderDateList();
+  }
+  wrap.classList.toggle('open');
+}
+
+// ===== 公司性质筛选（单选） =====
+function pjRenderCorpList() {
+  const list = q('#pjCorpList');
+  if (!list) return;
+  list.innerHTML = PJ_CORP_OPTIONS.map(o => {
+    const active = pjSelectedCorp === o.key;
+    return `<div class="pj-edu-row ${active ? 'active' : ''}" data-corpkey="${esc(o.key)}">
+      <span class="pj-edu-check">${active ? '✓' : ''}</span>
+      <span>${esc(o.label)}</span>
+    </div>`;
+  }).join('');
+  pjUpdateCorpCount();
+}
+
+function pjUpdateCorpCount() {
+  const cnt = q('#pjCorpCount');
+  if (!cnt) return;
+  const o = PJ_CORP_OPTIONS.find(x => x.key === pjSelectedCorp);
+  cnt.textContent = (o && o.label) || '全部';
+  cnt.classList.toggle('empty', !pjSelectedCorp);
+}
+
+function pjToggleCorp(ev) {
+  ev && ev.stopPropagation();
+  const wrap = q('#pjCorpWrap');
+  if (!wrap) return;
+  if (!wrap.classList.contains('open')) {
+    pjCloseOtherPopovers('pjCorpWrap');
+    pjRenderCorpList();
+  }
+  wrap.classList.toggle('open');
+}
+
+// 把公司性质映射为标题/摘要里要匹配的正则
+const PJ_CORP_RE = {
+  soe:     /国企|央企|国资|国有|中央|集团|中国|铁路|电网|石油|石化|煤矿|烟草|邮政|银行|建工|建设|铁建/,
+  private: /民企|民营|私企|有限公司|股份有限/,
+  gov:     /事业单位|公务员|政府|机关|公开招聘|教育局|卫健委|管委会|公开遴选|招考|事业编/,
+};
+
+function pjCorpMatch(it) {
+  if (!pjSelectedCorp) return true;
+  const text = `${it.title || ''} ${it.company || ''} ${it.summary || ''}`;
+  switch (pjSelectedCorp) {
+    case 'soe':     return PJ_CORP_RE.soe.test(text);
+    case 'private': return PJ_CORP_RE.private.test(text) && !PJ_CORP_RE.soe.test(text);
+    case 'gov':     return PJ_CORP_RE.gov.test(text);
+  }
+  return true;
+}
+
+// 根据公司名/标题/摘要推断公司类型（用于「公司类型」列的徽章）
+// 优先级：政府事业 > 国企央企 > 民企 > 未知（避免「公务员考试某国企」被错判为国企）
+function pjGetCorpType(it) {
+  const text = `${it.title || ''} ${it.company || ''} ${it.summary || ''}`;
+  if (PJ_CORP_RE.gov.test(text))     return { key: 'gov',     label: '政府事业' };
+  if (PJ_CORP_RE.soe.test(text))     return { key: 'soe',     label: '国企央企' };
+  if (PJ_CORP_RE.private.test(text)) return { key: 'private', label: '民企' };
+  return { key: 'unknown', label: '—' };
+}
+
+function renderPjSources() {
+  const grid = q('#pjSourcesGrid');
+  if (!grid) return;
+  if (!pjSources.length) {
+    // 源列表还没回来时，保留"加载中…"占位 — 不能在 sources fetch 完成前被刷出"暂无可用源"
+    if (!grid.innerHTML.includes('加载中')) {
+      grid.innerHTML = '<div style="color:var(--text-muted);font-size:11.5px;grid-column:1/-1;padding:8px">加载中…（如长时间无变化，刷新页面或检查 server.py 是否启动）</div>';
+    }
+    // 启动一次重试，把 source 拉回来
+    if (!grid.dataset.retryQueued) {
+      grid.dataset.retryQueued = '1';
+      setTimeout(() => { grid.dataset.retryQueued = ''; pjReloadSources(); }, 800);
+    }
+    return;
+  }
+  grid.innerHTML = pjSources.map(s => {
+    const v = PUBLIC_JOB_LOGOS[s.key] || { bg: '#7e7e7e', label: s.key.slice(0,2), sub: s.category };
+    const on = pjEnabled.has(s.key);
+    const cnt = pjPerSource[s.key];
+    const rawCnt = pjPerSourceRaw?.[s.key];
+    const err = pjErrors[s.key];
+    const skipReason = pjSkipped?.[s.key];
+    let statusBadge = '';
+    if (err) {
+      statusBadge = `<div class="pj-src-status err" title="${esc(err)}">⚠ 失败</div>`;
+    } else if (typeof cnt === 'number') {
+      // 原始 vs 过滤：raw > cnt 时显示 "cnt / raw"，否则只显示一个数字
+      const showRaw = typeof rawCnt === 'number' && rawCnt > cnt;
+      const cntText = showRaw ? `${cnt} / ${rawCnt}` : `${cnt}`;
+      const cntTitle = showRaw ? `过滤后 ${cnt} 条 · 原始抓到 ${rawCnt} 条` : '';
+      const skipChip = skipReason
+        ? ` <span class="pj-src-skip" title="${esc(skipReason)}">⚠</span>`
+        : '';
+      statusBadge = `<div class="pj-src-status ${cnt > 0 ? 'ok' : 'zero'}"${cntTitle ? ` title="${esc(cntTitle)}"` : ''}>${cntText} 条${skipChip}</div>`;
+    } else if (skipReason) {
+      // 没有数字但有 skip：单独显示警告条
+      statusBadge = `<div class="pj-src-status zero" title="${esc(skipReason)}">⚠ 跳过</div>`;
+    }
+    return `
+      <div class="pj-src ${on ? '' : 'disabled'}">
+        <div class="pj-src-logo" style="background:${v.bg}">${esc(v.label)}</div>
+        <div class="pj-src-body">
+          <div class="pj-src-name">${esc(s.name)}</div>
+          <div class="pj-src-sub">${esc(s.category || v.sub || '')}</div>
+          ${statusBadge}
+        </div>
+        <label class="pj-toggle" title="启用/禁用">
+          <input type="checkbox" ${on ? 'checked' : ''} onchange="togglePjSource('${esc(s.key)}', this.checked)">
+          <span class="knob"></span>
+        </label>
+      </div>`;
+  }).join('');
+}
+
+function togglePjSource(key, on) {
+  if (on) pjEnabled.add(key); else pjEnabled.delete(key);
+  try { localStorage.setItem('pj.enabled', JSON.stringify([...pjEnabled])); } catch {}
+  renderPjSources();
+}
+
+async function refreshPublicJobs() {
+  const btn = q('#pjRefreshBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '抓取中…'; }
+  try {
+    const params = new URLSearchParams();
+    if (pjSelectedIndustry) params.set('industry', pjSelectedIndustry);
+    // 把用户当前勾选的岗位拼成 keyword；附加公司性质关键词（外企/国企等会进 websearch query）
+    const kwParts = [];
+    if (pjSelectedJobs.length) kwParts.push(...pjSelectedJobs);
+    const corpOpt = PJ_CORP_OPTIONS.find(o => o.key === pjSelectedCorp);
+    if (corpOpt && corpOpt.kw) kwParts.push(corpOpt.kw);
+    if (kwParts.length) params.set('keyword', kwParts.join(' '));
+    if (pjEnabled.size) params.set('sources', [...pjEnabled].join(','));
+    // 每源单次抓 ~40 条，6 源合计上限 ~240；多次点击「抓取」会追加合并，不会重置
+    params.set('limit_per_source', '40');
+    // ✨ LLM 富化开关：关闭后服务端跳过 enrich，省 token
+    const enrichOn = !!q('#pjEnrichToggle')?.checked;
+    params.set('enrich', enrichOn ? 'true' : 'false');
+
+    // 没关键词时不再用 confirm 阻塞（首屏自动加载会被卡住）
+    // 改为在完成后的 toast 里提示用户"未选岗位 → 结果可能不准"
+    const hasKw = kwParts.length > 0;
+
+    const r = await fetch('/api/public_jobs/refresh?' + params.toString(), { method: 'POST' });
+    const d = await r.json();
+    if (d.status === 'busy') {
+      toast('上次抓取还在跑…', 'warn');
+      return;
+    }
+    // 每次抓取直接替换，展示最新结果
+    const incoming = d.items || [];
+    pjItems = incoming;
+    pjPage = 1;
+    pjPerSource = d.per_source || {};
+    pjPerSourceRaw = d.per_source_raw || {};
+    pjErrors = {};
+    pjSkipped = {};
+    (d.errors || []).forEach(e => {
+      const key = e.source || e.key;
+      if (!key) return;
+      if (e.skipped || e.reason) pjSkipped[key] = e.reason || e.error || '已跳过';
+      else if (e.error) pjErrors[key] = e.error;
+    });
+    q('#pjLastFetch').textContent = (d.fetched_at || '').replace('T', ' ').slice(0, 19) || '—';
+    renderPjSources();
+    renderPjTable();
+    const errs = d.errors || [];
+    // 关键词过滤掉了多少条 = 原始数 - 过滤后数（公告源不参与过滤所以差值就是噪声）
+    const raw = d.per_source_raw || {};
+    const filteredOut = Object.keys(raw).reduce(
+      (acc, k) => acc + Math.max(0, (raw[k] || 0) - (pjPerSource[k] || 0)),
+      0,
+    );
+    const filterNote = hasKw && filteredOut > 0 ? ` · 关键词过滤掉 ${filteredOut} 条无关` : '';
+    const noKwNote = !hasKw ? ' · 未选岗位，结果为最新发布、可能不相关' : '';
+    if (incoming.length === 0) {
+      const lines = pjSources.map(s => {
+        if (pjErrors[s.key]) return `${s.name}: ⚠ ${pjErrors[s.key]}`;
+        if (pjSkipped[s.key]) return `${s.name}: ⚠ 跳过(${pjSkipped[s.key]})`;
+        const r0 = raw[s.key] || 0;
+        const c = pjPerSource[s.key] || 0;
+        return r0 > c ? `${s.name}: ${c}/${r0}` : `${s.name}: ${c} 条`;
+      }).join(' · ');
+      toast(`未抓到匹配岗位 — ${lines}${filterNote}${noKwNote}（点 🩺 诊断 看详情）`, 'warn');
+    } else if (errs.length) {
+      const failedKeys = errs.filter(e => !e.skipped && e.error).map(e => e.source || e.key).filter(Boolean);
+      const skippedKeys = errs.filter(e => e.skipped).map(e => e.source || e.key).filter(Boolean);
+      const parts = [];
+      if (failedKeys.length) parts.push(`部分源失败: ${failedKeys.join(', ')}`);
+      if (skippedKeys.length) parts.push(`已跳过: ${skippedKeys.join(', ')}`);
+      const tail = parts.length ? ' · ' + parts.join(' · ') : '';
+      toast(`共 ${incoming.length} 条${filterNote}${noKwNote}${tail}`, 'warn');
+    } else {
+      toast(`共 ${incoming.length} 条${filterNote}${noKwNote}`, hasKw ? 'ok' : 'warn');
+    }
+  } catch (e) {
+    toast('抓取失败: ' + e.message, 'err');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 抓取'; }
+  }
+}
+
+async function diagPublicJobs() {
+  if (_pjDiagInflight) { toast('诊断进行中…', 'warn'); return; }
+  _pjDiagInflight = true;
+  const btn = q('#pjDiagBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '诊断中…'; }
+  try {
+    const r = await fetch('/api/public_jobs/diag');
+    const d = await r.json();
+    const lines = (d.results || []).map(r => {
+      const dot = r.ok ? (r.count > 0 ? '✅' : '⚪') : '❌';
+      const detail = r.ok
+        ? `${r.count} 条 · ${r.elapsed}s${r.sample_title ? ' · 样例: ' + r.sample_title : ''}`
+        : `${r.error}`;
+      return `${dot} ${r.name}: ${detail}`;
+    });
+    const allOk = (d.results || []).every(r => r.ok);
+    const anyData = (d.results || []).some(r => r.count > 0);
+    let header = anyData
+      ? '🩺 诊断完成 — 至少有源能拿到数据'
+      : (allOk
+          ? '🩺 所有源连接正常但都返回 0 条（这正常 — 部分源依赖时段/关键词）'
+          : '🩺 部分源失败 — 检查清单见下');
+    toast(header + '\n' + lines.join('\n'), anyData ? 'ok' : 'warn', 8000);
+  } catch (e) {
+    toast('诊断失败: ' + e.message + '（多半是 server 未启动或未重启 — 请确认 server.py 已重启）', 'err', 8000);
+  } finally {
+    _pjDiagInflight = false;
+    if (btn) { btn.disabled = false; btn.textContent = '🩺 诊断'; }
+  }
+}
+
+// 从标题/摘要里抠「报名截止/截止时间」— 公告类源没有结构化字段，靠正则尽力而为
+const PJ_DEADLINE_RE = /(?:报名截止|截止(?:日期|时间)?|截至(?:日期|时间)?|招聘截止|应聘截止|投递截止)[^0-9]{0,6}(20\d{2})[年\-./](\d{1,2})[月\-./](\d{1,2})/;
+const PJ_RANGE_RE = /20\d{2}[年\-./]\d{1,2}[月\-./]\d{1,2}(?:日)?\s*(?:[—\-至到~])\s*(20\d{2})?[年\-./]?(\d{1,2})[月\-./](\d{1,2})/;
+// 任意完整日期 — 兜底用：标题/摘要里见到的最晚日期当成截止
+const PJ_ANY_DATE_RE = /(20\d{2})[年\-./](\d{1,2})[月\-./](\d{1,2})/g;
+function pjExtractDeadline(it) {
+  if (it.deadline) {
+    return (it.deadline || '').replace('T', ' ').slice(0, 10);
+  }
+  const text = `${it.title || ''} ${it.summary || ''}`;
+  // 1) 强匹配：「截止/截至 + 日期」
+  let m = PJ_DEADLINE_RE.exec(text);
+  if (m) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  // 2) 日期区间：取右端
+  m = PJ_RANGE_RE.exec(text);
+  if (m) {
+    const y = m[1] || (it.publish_time || '').slice(0, 4) || String(new Date().getFullYear());
+    return `${y}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  }
+  // 3) 兜底：标题/摘要里任意完整日期 — 取「发布时间之后的最晚日期」当截止
+  //    这样能给绝大多数公告类岗位补上截止时间
+  const pubISO = (it.publish_time || '').slice(0, 10);
+  let latest = '';
+  PJ_ANY_DATE_RE.lastIndex = 0;
+  let mm;
+  while ((mm = PJ_ANY_DATE_RE.exec(text)) !== null) {
+    const iso = `${mm[1]}-${mm[2].padStart(2,'0')}-${mm[3].padStart(2,'0')}`;
+    if (pubISO && iso === pubISO) continue;     // 跳过和发布时间同一天的
+    if (iso > latest) latest = iso;
+  }
+  if (latest && (!pubISO || latest > pubISO)) return latest;
+  return latest || '';
+}
+
+function renderPjTable() {
+  const tb = q('#pjTbody');
+  if (!tb) return;
+
+  let items = pjItems;
+
+  // 1. 岗位过滤 — OR 语义（任一岗位关键词命中即保留）
+  //    公告型源（人社部/国资委/微信公众号 等）标题通常是「XX单位2026招聘公告」格式，
+  //    几乎不出现具体岗位词，强匹配会全部过滤掉，这类源直接放行交给用户自己看。
+  if (pjSelectedJobs.length) {
+    const kws = [...new Set(pjSelectedJobs.flatMap(j => {
+      const s = j.replace(/[(（].*?[)）]/g, '').trim();
+      const out = [s];
+      if (s.length > 3) out.push(s.slice(0, Math.min(4, s.length)));
+      return out;
+    }))];
+    const re = new RegExp(kws.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'i');
+    const BULLETIN_SRC = /(mohrss|sasac|guoping|iguopin|wechat|rsshub|gov)/i;
+    items = items.filter(it => {
+      if (BULLETIN_SRC.test(it.source || '')) return true; // 公告源直接放行
+      return re.test(it.title || '')
+          || re.test(it.summary || '')
+          || re.test(it.company || '');
+    });
+  }
+
+  // 2. 城市多选过滤（多数公告/政策源没有 location 字段，匹配为空时直接放行）
+  if (pjSelectedCities.length) {
+    items = items.filter(it => {
+      const loc = (it.location || '').trim();
+      if (!loc) return true; // 无地点信息的政策/公告类条目不过滤掉
+      const locN = loc.replace(/市/g, '');
+      return pjSelectedCities.some(c => locN.includes(c.replace(/市/g, '')));
+    });
+  }
+
+  // 3. 学历过滤（OR；无 education 字段的源默认放行）
+  if (pjSelectedEdus.length) {
+    const wantUnlimit = pjSelectedEdus.includes('不限');
+    items = items.filter(it => {
+      const edu = (it.education || '').trim();
+      if (!edu) return true;
+      if (wantUnlimit && /不限/.test(edu)) return true;
+      return pjSelectedEdus.some(e => e !== '不限' && edu.includes(e));
+    });
+  }
+
+  // 4. 发布时间过滤（单选；以本地时间为基准）
+  if (pjSelectedDate) {
+    const days = { '1d': 1, '7d': 7, '30d': 30, '90d': 90 }[pjSelectedDate];
+    if (days) {
+      const cutoff = Date.now() - days * 86400_000;
+      items = items.filter(it => {
+        const t = it.publish_time;
+        if (!t) return false; // 没发布时间的直接排除（避免污染近 N 天窗口）
+        const ts = Date.parse(t.replace(' ', 'T'));
+        if (Number.isNaN(ts)) return false;
+        return ts >= cutoff;
+      });
+    }
+  }
+
+  // 5. 公司性质过滤（单选）— 基于标题/公司名/摘要的关键词正则匹配
+  if (pjSelectedCorp) {
+    items = items.filter(pjCorpMatch);
+  }
+
+  // 总数 + 分页
+  const total = items.length;
+  q('#pjTotal').textContent = `${total}${pjItems.length !== total ? ' / ' + pjItems.length : ''}`;
+  const elVP = q('#vtPublicCount'); if (elVP) elVP.textContent = pjItems.length;
+
+  if (!total) {
+    let reason;
+    if (!pjItems.length) {
+      reason = '尚无数据 — 点 🔄 抓取 拉一次（首次抓取约需 5~15 秒）';
+    } else if (pjSelectedJobs.length || pjSelectedCities.length || pjSelectedEdus.length || pjSelectedDate) {
+      reason = `共抓到 ${pjItems.length} 条，但当前筛选无匹配 — 试试清空岗位/城市/学历/发布时间 或 切换条件`;
+    } else {
+      reason = '没有数据';
+    }
+    tb.innerHTML = `<tr class="pj-empty-row"><td colspan="10">${reason}</td></tr>`;
+    pjRenderPager(0, 0);
+    return;
+  }
+
+  // 6. 匹配分排序（可选）— 已打分的按 score 降序，未打分的沉底保持原顺序
+  if (pjSortByScore) {
+    items = [...items].sort((a, b) => {
+      const sa = pjScores[a.id]?.score;
+      const sb = pjScores[b.id]?.score;
+      const va = (typeof sa === 'number') ? sa : -1;
+      const vb = (typeof sb === 'number') ? sb : -1;
+      return vb - va;
+    });
+  }
+
+  const totalPages = Math.max(1, Math.ceil(total / PJ_PAGE_SIZE));
+  if (pjPage > totalPages) pjPage = totalPages;
+  if (pjPage < 1) pjPage = 1;
+  const start = (pjPage - 1) * PJ_PAGE_SIZE;
+  const pageItems = items.slice(start, start + PJ_PAGE_SIZE);
+
+  tb.innerHTML = pageItems.map(it => {
+    const srcLabel = it.source_label || (pjSources.find(s => it.source?.startsWith(s.key))?.name) || it.source || '—';
+    const pubTime = (it.publish_time || '').replace('T', ' ').slice(0, 16) || '—';
+    const eff = pjEffective(it);
+    const deadline = eff.deadline;
+    const applied = pjAppliedIds.has(it.id);
+    const sc = pjScores[it.id];
+    let scoreCell = '<span class="pj-score-pill none" title="未评分">—</span>';
+    if (sc && typeof sc.score === 'number') {
+      const tier = sc.score >= 75 ? 'high' : sc.score >= 50 ? 'mid' : 'low';
+      scoreCell = `<span class="pj-score-pill ${tier}" title="${esc(sc.reason || '')}">${sc.score}</span>`;
+    }
+    const corp = pjGetCorpType(it);
+    // _src.* 来自 LLM 补全 → 加 pj-field-llm 底纹，鼠标 hover 提示"由 LLM 补全"
+    const locClass = eff._src.location ? 'col-loc pj-field-llm' : 'col-loc';
+    const eduClass = eff._src.education ? 'col-edu pj-field-llm' : 'col-edu';
+    const dlClass  = eff._src.deadline  ? 'col-time pj-field-llm' : 'col-time';
+    const llmTip   = '由 LLM 补全';
+    return `
+      <tr class="${applied ? 'pj-row-applied' : ''}" data-pjid="${esc(it.id)}">
+        <td class="pj-company">${esc(it.company || '—')}</td>
+        <td class="pj-title" title="${esc(it.summary || '')}">${esc(it.title || '—')}</td>
+        <td class="${locClass}" ${eff._src.location ? `title="${llmTip}"` : ''}>${esc(eff.location || '—')}</td>
+        <td class="${eduClass}" ${eff._src.education ? `title="${llmTip}"` : ''}>${esc(eff.education || '—')}</td>
+        <td class="col-src">${esc(srcLabel)}</td>
+        <td class="col-time">${esc(pubTime)}</td>
+        <td class="${dlClass} ${deadline ? 'pj-deadline' : ''}" ${eff._src.deadline ? `title="${llmTip}"` : ''}>${esc(deadline || '—')}</td>
+        <td class="col-corp"><span class="pj-corp-tag ${corp.key}">${esc(corp.label)}</span></td>
+        <td class="col-score">${scoreCell}</td>
+        <td class="col-applied">
+          <span class="pj-applied-btn ${applied ? 'on' : ''}" data-toggle-applied="${esc(it.id)}" title="${applied ? '取消标记' : '标记已投递'}">${applied ? '✓' : '○'}</span>
+        </td>
+        <td class="col-link">${it.apply_url
+          ? `<a class="go-link" href="${safeUrl(it.apply_url)}" target="_blank" rel="noopener"
+                title="打开详情（如条目字段不全，会在后台用 LLM 补全）"
+                onclick="pjMaybeEnrichOne('${esc(it.id)}')">↗</a>`
+          : '—'}</td>
+      </tr>`;
+  }).join('');
+  pjRenderPager(pjPage, totalPages);
+}
+
+function pjRenderPager(page, totalPages) {
+  let pager = q('#pjPager');
+  if (!pager) {
+    const wrap = q('.pj-table-wrap');
+    if (!wrap) return;
+    pager = document.createElement('div');
+    pager.id = 'pjPager';
+    pager.className = 'pj-pager';
+    wrap.appendChild(pager);
+  }
+  if (totalPages <= 1) { pager.innerHTML = ''; pager.style.display = 'none'; return; }
+  pager.style.display = '';
+  const btn = (label, target, disabled, active=false) =>
+    `<button class="pj-page-btn ${active ? 'active' : ''}" ${disabled ? 'disabled' : ''} onclick="pjGoPage(${target})">${label}</button>`;
+  // 紧凑分页：首/末 + 当前±2
+  const pages = new Set([1, totalPages, page - 1, page, page + 1]);
+  const arr = [...pages].filter(p => p >= 1 && p <= totalPages).sort((a,b) => a - b);
+  let html = btn('‹', page - 1, page <= 1);
+  let prev = 0;
+  for (const p of arr) {
+    if (p - prev > 1) html += `<span class="pj-page-sep">…</span>`;
+    html += btn(p, p, false, p === page);
+    prev = p;
+  }
+  html += btn('›', page + 1, page >= totalPages);
+  pager.innerHTML = `<span class="pj-page-info">第 ${page} / ${totalPages} 页</span>${html}`;
+}
+
+function pjGoPage(p) {
+  pjPage = p;
+  renderPjTable();
+  const tbl = q('.pj-table-wrap'); if (tbl) tbl.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
+document.addEventListener('keydown', e => { if (e.key==='Enter'&&e.ctrlKey) { e.preventDefault(); go() } });
+</script>
+</body>
+</html>

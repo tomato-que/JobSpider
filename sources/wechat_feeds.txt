@@ -1,0 +1,16 @@
+# sources/wechat_feeds.txt — 微信公众号 RSS 源配置
+#
+# 格式（每行）:
+#   <feed_url> | <公众号显示名>
+#
+# 注释（#开头）和空行会被忽略。
+#
+# 现实背景（2026-05）：
+#   公开 rsshub.app 实例的所有微信路由几乎全部不可用（依赖的第三方镜像下线）。
+#   要真正能用，请自建 RSSHub 实例 + Wechat2RSS 私部署，加上目标公众号后把
+#   feed URL 填到这里。
+#
+# 示例（占位，请替换成你自建的实例域名）：
+# https://rss.yourdomain.com/wechat/wechat2rss/<id> | 央国企招聘
+# https://rss.yourdomain.com/wechat/wechat2rss/<id> | 应届生求职指南
+# https://rss.yourdomain.com/wechat/wechat2rss/<id> | OfferShow
