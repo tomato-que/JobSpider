@@ -74,10 +74,15 @@ class FilterMixin:
         返回 (是否匹配, 不匹配原因)
         """
         # 标题黑名单关键词
+        # 「广告」一刀切会误杀广告投放工程师 / 广告平台开发 / 广告算法等技术岗，
+        # 因此黑名单只在标题不含技术关键词时才生效。
         _TITLE_BLACKLIST = ["广告"]
+        _TECH_WHITELIST = ("工程师", "开发", "算法", "架构", "技术", "研发",
+                           "platform", "developer", "engineer")
         title = job.job_title or ""
+        title_lower = title.lower()
         for kw in _TITLE_BLACKLIST:
-            if kw in title:
+            if kw in title and not any(t in title_lower for t in _TECH_WHITELIST):
                 return False, f"标题含屏蔽词: {kw}"
 
         # 城市
@@ -97,20 +102,26 @@ class FilterMixin:
             if job.salary_min > params.salary_max:
                 return False, f"薪资不符(最低{job.salary_min:g}K>{params.salary_max}K)"
 
-        # 经验：用户能接受的范围 vs 岗位要求范围
-        if params.experience and params.experience != "不限":
-            user_lo, user_hi = self._EXP_RANGE.get(params.experience, (0, 99))
+        # 经验：多选 OR 语义 — 岗位区间与任一所选区间相交即通过
+        exp_selected = [e for e in (getattr(params, "experiences", None) or []) if e and e != "不限"]
+        if not exp_selected and params.experience and params.experience != "不限":
+            exp_selected = [params.experience]
+        if exp_selected:
             job_lo, job_hi = self._parse_job_exp_range(job.experience_required)
-            # 区间不相交 → 不匹配
-            if job_hi < user_lo or job_lo > user_hi:
-                return False, f"经验不符(岗位:{job.experience_required or '?'} vs 用户:{params.experience})"
+            if not any(
+                not (job_hi < self._EXP_RANGE.get(e, (0, 99))[0] or job_lo > self._EXP_RANGE.get(e, (0, 99))[1])
+                for e in exp_selected
+            ):
+                return False, f"经验不符(岗位:{job.experience_required or '?'} vs 用户:{'/'.join(exp_selected)})"
 
-        # 学历：岗位要求 > 用户学历 → 不匹配
-        if params.education and params.education != "不限":
-            user_lv = self._edu_level(params.education)
+        # 学历：多选 OR 语义 — 任一所选学历达到或超过岗位要求即通过
+        edu_selected = [e for e in (getattr(params, "educations", None) or []) if e and e != "不限"]
+        if not edu_selected and params.education and params.education != "不限":
+            edu_selected = [params.education]
+        if edu_selected:
             job_lv = self._edu_level(job.education_required)
-            if user_lv and job_lv and job_lv > user_lv:
-                return False, f"学历不符(岗位:{job.education_required} > 用户:{params.education})"
+            if job_lv and not any(self._edu_level(e) >= job_lv for e in edu_selected):
+                return False, f"学历不符(岗位:{job.education_required} > 用户:{'/'.join(edu_selected)})"
 
         return True, ""
 

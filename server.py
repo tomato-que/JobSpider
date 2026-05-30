@@ -191,6 +191,16 @@ class ScrapeRequest(BaseModel):
     platform_limits: Optional[dict] = None     # {"boss": 10, "zhilian": 5, ...}
     apply_rate: Optional[str] = "normal"       # slow / normal / fast / turbo
     llm_config: Optional[dict] = None
+    global_limit: Optional[int] = None
+    daily_limit_per_platform: Optional[dict] = None
+    active_hours: Optional[list] = None         # [9, 22] — pydantic-friendly
+    burst_pause_after: Optional[int] = None
+    burst_pause_minutes: Optional[list] = None  # [30, 90]
+    max_per_company_per_day: Optional[int] = None
+    dry_run: bool = False
+    experiences: Optional[list] = None          # 经验多选 ["1-3年","5-10年"]，与单值 experience 共存
+    educations: Optional[list] = None           # 学历多选 ["本科","硕士"]
+    skip_applied: bool = True                    # 跨任务去重：跳过 7 天内已真实投递的同一岗位
 
 
 class EnrichRequest(BaseModel):
@@ -221,6 +231,95 @@ async def index():
     return HTMLResponse("<h1>Static files not found</h1>")
 
 
+@app.post("/api/preflight")
+async def preflight(req: ScrapeRequest):
+    """投递前预览：返回平台估算、剩余配额、风险提示。
+
+    不启动任务、不写库 — 只读 DB 历史。
+    """
+    try:
+        from config import PLATFORM_DAILY_HARD_CAP, is_within_active_hours
+    except ImportError:
+        PLATFORM_DAILY_HARD_CAP = {"boss":150,"zhilian":80,"job51":120,"liepin":80}
+        def is_within_active_hours(_): return True
+
+    # 关键词/城市组合数
+    kw = [k.strip() for k in (req.keywords or []) if k and k.strip()]
+    if req.keyword and req.keyword.strip() and req.keyword.strip() not in kw:
+        kw.append(req.keyword.strip())
+    if not kw:
+        raise HTTPException(status_code=422, detail="至少指定一个关键词")
+    cities = [c.strip() for c in (req.cities or []) if c and c.strip()]
+    if req.city and req.city.strip() and req.city.strip() not in cities:
+        cities.append(req.city.strip())
+    combos = max(1, len(kw)) * max(1, len(cities) or 1)
+
+    pl = req.platform_limits or {}
+    daily_cap = req.daily_limit_per_platform or {}
+    estimates = []
+    total = 0
+    warnings = []
+
+    for plat in (req.platforms or []):
+        per_platform_cap = pl.get(plat) if isinstance(pl, dict) else None
+        per_daily_cap   = daily_cap.get(plat) if isinstance(daily_cap, dict) else None
+        already = 0
+        try:
+            from core import db as _db
+            already = await _db.count_applied_in_window(plat, 24)
+        except Exception:
+            already = 0
+        hard = PLATFORM_DAILY_HARD_CAP.get(plat, 9999)
+        cap_eff = per_platform_cap if per_platform_cap is not None else hard
+        if per_daily_cap is not None:
+            cap_eff = min(cap_eff, max(0, per_daily_cap - already))
+        else:
+            cap_eff = min(cap_eff, max(0, hard - already))
+        estimates.append({
+            "platform": plat,
+            "platform_limit": per_platform_cap,
+            "daily_limit": per_daily_cap,
+            "hard_cap": hard,
+            "applied_today": already,
+            "estimated_remaining": cap_eff,
+        })
+        total += cap_eff
+        if per_platform_cap is not None and per_platform_cap > hard:
+            warnings.append(f"{plat} platform_limit={per_platform_cap} 超过硬上限 {hard}")
+        if already >= hard:
+            warnings.append(f"{plat} 今日已投 {already} 条，已达硬上限 {hard}")
+
+    if req.global_limit is not None:
+        total = min(total, max(0, int(req.global_limit)))
+
+    # 时间窗
+    in_window = True
+    try:
+        ah = req.active_hours
+        if ah and len(ah) == 2:
+            in_window = is_within_active_hours((int(ah[0]), int(ah[1])))
+    except Exception:
+        pass
+    if not in_window:
+        warnings.append("当前时间不在 active_hours 投递窗口内 — 任务启动后会立即暂停")
+
+    # 速率估算（normal 平均 6s/条）
+    rate = (req.apply_rate or "normal").lower()
+    avg_sec = {"slow": 12.0, "normal": 6.0, "fast": 4.0, "turbo": 3.5}.get(rate, 6.0)
+    eta_min = round(total * avg_sec / 60, 1)
+
+    return {
+        "ok": True,
+        "combos": combos,
+        "platforms": estimates,
+        "total_estimate": total,
+        "eta_minutes": eta_min,
+        "active_hours_now": in_window,
+        "dry_run": bool(req.dry_run),
+        "warnings": warnings,
+    }
+
+
 @app.post("/api/scrape")
 async def start_scrape(req: ScrapeRequest):
     """启动一次抓取任务"""
@@ -233,6 +332,46 @@ async def start_scrape(req: ScrapeRequest):
             )
 
     task_id = str(uuid.uuid4())[:8]
+
+    # Anti-ban hard cap validation
+    try:
+        from config import PLATFORM_DAILY_HARD_CAP
+    except ImportError:
+        PLATFORM_DAILY_HARD_CAP = {"boss":150,"zhilian":80,"job51":120,"liepin":80}
+
+    pl = req.platform_limits or {}
+    if isinstance(pl, dict):
+        for k, v in pl.items():
+            if v is None:
+                continue
+            try:
+                vi = int(v)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422,
+                                    detail=f"platform_limits[{k}] 必须是整数")
+            cap = PLATFORM_DAILY_HARD_CAP.get(k)
+            if cap is not None and vi > cap:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"platform_limits[{k}]={vi} 超过该平台日硬上限 {cap}，"
+                           f"建议 ≤ {cap} 以降低封号风险"
+                )
+    dl = req.daily_limit_per_platform or {}
+    if isinstance(dl, dict):
+        for k, v in dl.items():
+            if v is None:
+                continue
+            try:
+                vi = int(v)
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=422,
+                                    detail=f"daily_limit_per_platform[{k}] 必须是整数")
+            cap = PLATFORM_DAILY_HARD_CAP.get(k)
+            if cap is not None and vi > cap:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"daily_limit_per_platform[{k}]={vi} 超过硬上限 {cap}"
+                )
 
     tasks[task_id] = {
         "status": "pending",
@@ -443,6 +582,14 @@ async def get_stats(task_id: str):
         "platforms": platform_count,
         "platform_status": {r["platform_name"]: r["status"] for r in results},
     }
+
+
+@app.get("/api/summary/{task_id}")
+async def get_task_summary(task_id: str):
+    """投递小结：成功/跳过/失败计数 + 跳过原因分桶，用于任务结束后的可读汇总。"""
+    _validate_task_id(task_id)
+    breakdown = await db.get_task_skip_breakdown(task_id)
+    return {"ok": True, "task_id": task_id, **breakdown}
 
 
 @app.get("/api/export")
@@ -1044,6 +1191,16 @@ async def _run_scrape(task_id: str, req: ScrapeRequest):
         combo_idx = 0
         # 跨组合的累计投递计数（确保 platform_limits 是任务级而非单组合级）
         applied_so_far: dict[str, int] = {p: 0 for p in req.platforms}
+        # 跨重启日上限：从 DB 读取 24h 内已投，作为 applied_so_far 的初值
+        try:
+            from core import db as _db
+            for p in req.platforms:
+                seed = await _db.count_applied_in_window(p, 24)
+                if seed > 0:
+                    applied_so_far[p] = seed
+                    print(f"  [Task {task_id}] DB 历史: {p} 24h 已投 {seed}", flush=True)
+        except Exception as _e:
+            print(f"  [Task {task_id}] DB priming 失败: {_e}", flush=True)
         original_limits: dict[str, int] = dict(req.platform_limits or {})
 
         for city in city_list:
@@ -1071,15 +1228,48 @@ async def _run_scrape(task_id: str, req: ScrapeRequest):
                     salary_max=req.salary_max,
                     experience=req.experience,
                     education=req.education,
+                    experiences=req.experiences or [],
+                    educations=req.educations or [],
+                    skip_applied=req.skip_applied,
                     platforms=req.platforms,
                     auto_apply=req.auto_apply,
                     greeting_template=req.greeting_template,
                     exclude_rules=req.exclude_rules,
                     platform_limits=current_limits,
                     apply_rate=req.apply_rate or "normal",
+                    # 防封号参数（SearchParams 已包含这些字段）
+                    global_limit=req.global_limit,
+                    daily_limit_per_platform=req.daily_limit_per_platform or {},
+                    active_hours=(tuple(req.active_hours)
+                                  if req.active_hours and len(req.active_hours) == 2
+                                  else None),
+                    burst_pause_after=req.burst_pause_after,
+                    burst_pause_minutes=(tuple(req.burst_pause_minutes)
+                                         if req.burst_pause_minutes
+                                         and len(req.burst_pause_minutes) == 2
+                                         else (30, 90)),
+                    max_per_company_per_day=req.max_per_company_per_day,
+                    dry_run=req.dry_run,
                 )
                 agent = MasterAgent(params, progress_callback=on_progress,
                                     job_callback=on_job, log_callback=on_log)
+                # Inject stop-check + global-limit hooks (no-op if MasterAgent
+                # doesn't support these setters yet — concurrently being added).
+                _stop_fn = lambda: bool(entry.get("stop_requested"))
+                _global_lim = req.global_limit
+                _global_count_fn = lambda: sum(applied_so_far.values())
+                _set_stop = getattr(agent, "set_stop_check", None)
+                if callable(_set_stop):
+                    try:
+                        _set_stop(_stop_fn)
+                    except Exception:
+                        pass
+                _set_glob = getattr(agent, "set_global_limit", None)
+                if callable(_set_glob):
+                    try:
+                        _set_glob(_global_lim, _global_count_fn)
+                    except Exception:
+                        pass
                 result = await agent.run()
                 merged_jobs.extend(result["jobs"])
                 merged_results.extend(result["results"])

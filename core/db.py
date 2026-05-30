@@ -87,6 +87,8 @@ def _init_sync():
         CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(apply_status);
         CREATE INDEX IF NOT EXISTS idx_jobs_updated ON jobs(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_tasks_started ON tasks(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_jobs_platform_status_updated ON jobs(platform, apply_status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_jobs_company_status_updated ON jobs(company_name, apply_status, updated_at);
         """)
 
 
@@ -397,4 +399,174 @@ def _to_float(v):
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+# ───────── 投递配额查询（防封号 / 跨重启日上限） ─────────
+
+def _count_applied_since(platform: str, since_iso: str) -> int:
+    """SQL: 计算指定平台自 since_iso 以来 apply_status='applied' 的条数。"""
+    with _conn() as c:
+        row = c.execute("""
+            SELECT COUNT(*) AS n FROM jobs
+            WHERE platform = ?
+              AND apply_status = 'applied'
+              AND updated_at >= ?
+        """, (platform, since_iso)).fetchone()
+    return int(row["n"]) if row else 0
+
+
+async def count_applied_in_window(platform: str, hours: int = 24) -> int:
+    """统计某平台过去 N 小时内的实际投递数（apply_status='applied'）。
+
+    用于 daily_limit_per_platform 的跨任务/跨重启执行 — 即使 in-memory
+    _applied_total 清零了，DB 里的历史投递记录也能让上限继续生效。
+
+    dry_run 状态不计入此处，因为没有真投。
+    """
+    from datetime import timedelta
+    since = (datetime.now() - timedelta(hours=hours)).isoformat()
+    try:
+        return await asyncio.to_thread(_count_applied_since, platform, since)
+    except Exception as e:
+        print(f"  [DB] count_applied_in_window 失败: {e}", flush=True)
+        return 0
+
+
+def _count_applied_company_since(company: str, since_iso: str) -> int:
+    """SQL: 同公司在指定时间起 apply_status='applied' 的条数 (跨平台)。"""
+    if not company:
+        return 0
+    with _conn() as c:
+        row = c.execute("""
+            SELECT COUNT(*) AS n FROM jobs
+            WHERE company_name = ?
+              AND apply_status = 'applied'
+              AND updated_at >= ?
+        """, (company, since_iso)).fetchone()
+    return int(row["n"]) if row else 0
+
+
+async def count_company_applied_today(company: str, hours: int = 24) -> int:
+    """同一公司过去 N 小时内的投递数（跨平台），用于 max_per_company_per_day。
+    避免对同一家公司在多个平台/多个职位上集中投递（强 bot 信号）。
+    """
+    from datetime import timedelta
+    if not company or not company.strip():
+        return 0
+    since = (datetime.now() - timedelta(hours=hours)).isoformat()
+    try:
+        return await asyncio.to_thread(_count_applied_company_since,
+                                       company.strip(), since)
+    except Exception as e:
+        print(f"  [DB] count_company_applied_today 失败: {e}", flush=True)
+        return 0
+
+
+def _count_dry_run_today(task_id: str) -> int:
+    """统计某任务的 dry_run 条目（仅供 UI 显示）"""
+    with _conn() as c:
+        row = c.execute("""
+            SELECT COUNT(*) AS n FROM jobs
+            WHERE task_id = ? AND apply_status = 'dry_run'
+        """, (task_id,)).fetchone()
+    return int(row["n"]) if row else 0
+
+
+async def count_task_dry_run(task_id: str) -> int:
+    try:
+        return await asyncio.to_thread(_count_dry_run_today, task_id)
+    except Exception as e:
+        print(f"  [DB] count_task_dry_run 失败: {e}", flush=True)
+        return 0
+
+
+# ───────── 跨任务去重 / 投递报告 ─────────
+
+def _exists_applied(platform: str, job_id: str, since_iso: str) -> bool:
+    """SQL: 是否存在该 platform+job_id 在 since_iso 之后真投过 (apply_status='applied')。"""
+    with _conn() as c:
+        row = c.execute("""
+            SELECT 1 FROM jobs
+            WHERE platform = ?
+              AND job_id = ?
+              AND apply_status = 'applied'
+              AND updated_at >= ?
+            LIMIT 1
+        """, (platform, job_id, since_iso)).fetchone()
+    return bool(row)
+
+
+async def has_applied_before(platform: str, job_id: str, hours: int = 168) -> bool:
+    """跨任务去重：过去 N 小时内是否对该职位真投过（apply_status='applied'）。
+
+    只有 'applied' 算数。'dry_run' / 'skipped' / 'failed' / NULL 都不算
+    —— dry_run 只是预览，之后仍应允许真投。默认窗口 168h = 7 天。
+
+    fail-open：去重检查出错时返回 False，不阻塞真投（DB 是辅助，永不阻断主流程）。
+    """
+    from datetime import timedelta
+    if not platform or not job_id:
+        return False
+    since = (datetime.now() - timedelta(hours=hours)).isoformat()
+    try:
+        return await asyncio.to_thread(_exists_applied, platform, job_id, since)
+    except Exception as e:
+        print(f"  [DB] has_applied_before 失败: {e}", flush=True)
+        return False
+
+
+def _normalize_skip_reason(reason) -> str:
+    """把自由文本的 skip 原因归一化成短而稳定的桶标签。
+    取第一个分隔符 ( : ： , 之前的前缀；空则归 '其他'。"""
+    if not reason:
+        return "其他"
+    label = str(reason)
+    for delim in ("(", ":", "：", ","):
+        idx = label.find(delim)
+        if idx != -1:
+            label = label[:idx]
+    label = label.strip()
+    return label or "其他"
+
+
+def _task_skip_breakdown(task_id: str) -> dict:
+    """SQL: 一次性算出各状态计数 + 取出 skipped 行的原因（在 Python 里归一化分组）。"""
+    with _conn() as c:
+        row = c.execute("""
+            SELECT
+                SUM(CASE WHEN apply_status='applied' THEN 1 ELSE 0 END) AS applied,
+                SUM(CASE WHEN apply_status='dry_run' THEN 1 ELSE 0 END) AS dry_run,
+                SUM(CASE WHEN apply_status='failed'  THEN 1 ELSE 0 END) AS failed,
+                SUM(CASE WHEN apply_status='skipped' THEN 1 ELSE 0 END) AS skipped,
+                COUNT(*) AS total
+            FROM jobs WHERE task_id = ?
+        """, (task_id,)).fetchone()
+        reasons = c.execute("""
+            SELECT apply_skip_reason FROM jobs
+            WHERE task_id = ? AND apply_status = 'skipped'
+        """, (task_id,)).fetchall()
+    skip_reasons: dict = {}
+    for r in reasons:
+        label = _normalize_skip_reason(r["apply_skip_reason"])
+        skip_reasons[label] = skip_reasons.get(label, 0) + 1
+    return {
+        "applied": int(row["applied"] or 0),
+        "dry_run": int(row["dry_run"] or 0),
+        "failed": int(row["failed"] or 0),
+        "skipped": int(row["skipped"] or 0),
+        "total": int(row["total"] or 0),
+        "skip_reasons": skip_reasons,
+    }
+
+
+async def get_task_skip_breakdown(task_id: str) -> dict:
+    """任务跑完后的汇总：各状态计数 + skipped 行按归一化原因分组的明细。
+    用于 run 结束后的统计报告。
+    """
+    try:
+        return await asyncio.to_thread(_task_skip_breakdown, task_id)
+    except Exception as e:
+        print(f"  [DB] get_task_skip_breakdown 失败: {e}", flush=True)
+        return {"applied": 0, "dry_run": 0, "failed": 0,
+                "skipped": 0, "total": 0, "skip_reasons": {}}
 

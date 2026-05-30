@@ -228,8 +228,27 @@ JD详情: {jd_text[:1200]}
 
     @staticmethod
     def _fallback_greeting(job_title: str, company_name: str) -> str:
-        """LLM 不可用时的模板打招呼语"""
-        return f"您好，我对{company_name}的{job_title}岗位很感兴趣，我的技能和经验与该职位高度匹配，期待与您进一步沟通。"
+        """LLM 不可用时的回退打招呼语 — 用 (title,company) 哈希在多个模板中确定性采样,
+        避免在批量投递场景下发送完全相同的文本（被风控识别为模板）。
+        """
+        import hashlib
+        title = (job_title or "").strip() or "该岗位"
+        company = (company_name or "").strip() or "贵公司"
+        templates = [
+            "您好，看到{company}在招{title}，对岗位职责很感兴趣，希望有机会进一步沟通。",
+            "您好，我对{company}的{title}方向比较关注，方便聊一下岗位的具体要求吗？",
+            "您好，{title}岗位的方向跟我目前关注的领域比较契合，想了解一下{company}团队情况。",
+            "Hi，看到{company}的{title}招聘，岗位描述跟我想做的事比较匹配，希望进一步交流。",
+            "您好，{title}这个岗位很吸引我，想多了解一下{company}团队和具体业务，期待沟通。",
+            "您好，对{company}的{title}岗位很感兴趣，想请教下日常工作内容和团队规模，谢谢。",
+            "您好，看到{title}的招聘信息，岗位方向我比较有兴趣，想多了解一下{company}的情况。",
+        ]
+        # 用 (company, title) 的 md5 决定使用哪个模板 — 同一岗位每次都一致，跨岗位多样化
+        h = hashlib.md5(f"{company}|{title}".encode("utf-8")).hexdigest()
+        idx = int(h[:8], 16) % len(templates)
+        text = templates[idx].format(title=title[:30], company=company[:30])
+        # 安全裁剪
+        return text[:200]
 
     async def should_skip_by_rule(self, job_brief: str,
                                   exclude_rules: str) -> tuple[bool, str]:

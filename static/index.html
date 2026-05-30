@@ -460,6 +460,51 @@
   }
   .chip-dot { width:6px; height:6px; border-radius:50% }
 
+  /* 经验/学历 下拉多选（外壳与 .select 一致，弹层为可勾选行） */
+  .ms { position: relative; width: 100%; }
+  .ms-trigger {
+    width: 100%; box-sizing: border-box;
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-base);
+    border-radius: var(--radius-xs);
+    padding: 10px 13px; padding-right: 32px;
+    color: var(--text-main);
+    font-family: var(--font-sans); font-size: 14px;
+    cursor: pointer; user-select: none; white-space: nowrap;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6' fill='none' stroke='%237878a0' stroke-width='1.3'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 13px center;
+    transition: all 180ms var(--ease-out);
+  }
+  .ms-trigger:hover { border-color: var(--border-hover) }
+  .ms.open .ms-trigger { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-glow2) }
+  .ms-label { overflow: hidden; text-overflow: ellipsis }
+  .ms-label.placeholder { color: var(--text-muted) }
+  .ms-pop {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 90;
+    background: var(--bg-raised); border: 1px solid var(--border-base);
+    border-radius: var(--radius-xs); box-shadow: var(--shadow-elevated);
+    padding: 5px; display: none; max-height: 260px; overflow-y: auto;
+    animation: paneIn 160ms var(--ease-out) both;
+  }
+  .ms.open .ms-pop { display: block }
+  .ms-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px; border-radius: var(--radius-xs);
+    font-size: 13px; color: var(--text-body); cursor: pointer; user-select: none;
+  }
+  .ms-row:hover { background: var(--bg-surface) }
+  .ms-row.active { color: var(--text-bright); font-weight: 600 }
+  .ms-check {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 15px; height: 15px; border-radius: 3px;
+    border: 1px solid var(--border-hover); color: transparent;
+    font-size: 11px; line-height: 1; flex-shrink: 0; transition: all 120ms;
+  }
+  .ms-row.active .ms-check {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+
   /* === BUTTONS === */
   .btn {
     display: inline-flex; align-items: center; gap: 7px;
@@ -818,6 +863,24 @@
   .stat-pill.applied { background: rgba(21,160,90,0.10); color: var(--green); border-color: rgba(21,160,90,0.30) !important }
   .stat-pill.skipped { background: rgba(156,156,172,0.12); color: var(--text-dim); border-color: rgba(156,156,172,0.30) !important }
   .stat-pill.failed  { background: rgba(216,52,78,0.10); color: var(--red); border-color: rgba(216,52,78,0.30) !important }
+
+  /* 投递小结面板 */
+  .summary-panel {
+    margin: 0 0 12px; padding: 12px 16px;
+    background: var(--bg-raised); border: 1px solid var(--border-base);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-sm);
+    animation: paneIn 200ms var(--ease-out) both;
+  }
+  .summary-panel .sum-head {
+    font-size: 13.5px; font-weight: 700; color: var(--text-bright);
+    letter-spacing: .2px;
+  }
+  .summary-panel .sum-reasons {
+    margin-top: 6px; font-size: 12px; color: var(--text-body);
+    line-height: 1.6;
+  }
+  .summary-panel .sum-reasons b { color: var(--text-bright); font-weight: 600 }
 
   /* === UTILITY === */
   .hidden { display: none !important }
@@ -1751,21 +1814,20 @@
             </div>
 
             <div class="field">
-              <label class="field-hint">经验 · 学历</label>
+              <label class="field-hint">经验 · 学历 <span style="font-weight:400;color:var(--text-muted)">(下拉多选 · 任选其一即匹配 · 不选=不限)</span></label>
               <div class="row-2">
-                <select class="select" id="exp">
-                  <option value="">经验不限</option>
-                  <option value="应届生">应届生</option>
-                  <option value="1-3年">1&ndash;3 年</option>
-                  <option value="3-5年">3&ndash;5 年</option>
-                  <option value="5-10年">5&ndash;10 年</option>
-                  <option value="10年以上">10 年以上</option>
-                </select>
-                <select class="select" id="edu">
-                  <option value="">学历不限</option>
-                  <option value="大专">大专</option><option value="本科">本科</option>
-                  <option value="硕士">硕士</option><option value="博士">博士</option>
-                </select>
+                <div class="ms" id="expMs" data-kind="exp">
+                  <div class="ms-trigger" onclick="msToggle('exp', event)">
+                    <span class="ms-label placeholder" id="expLabel">经验不限</span>
+                  </div>
+                  <div class="ms-pop" id="expPop"></div>
+                </div>
+                <div class="ms" id="eduMs" data-kind="edu">
+                  <div class="ms-trigger" onclick="msToggle('edu', event)">
+                    <span class="ms-label placeholder" id="eduLabel">学历不限</span>
+                  </div>
+                  <div class="ms-pop" id="eduPop"></div>
+                </div>
               </div>
             </div>
 
@@ -1818,6 +1880,83 @@
               <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">
                 速率越快越容易触发风控；建议首次投递选"标准"或"慢"
               </div>
+            </div>
+
+            <!-- ===== 防封号 / 上限控制 ===== -->
+            <div class="field">
+              <label class="field-hint">
+                防封号 / 上限控制 <span style="font-weight:400;color:var(--text-muted)">(防止账号被风控)</span>
+              </label>
+              <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;line-height:1.5">
+                各项达任一上限即停止；未填项使用平台硬顶兜底，不会盲投。
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+                <div>
+                  <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">全局总上限 <span style="color:var(--text-dim)">(本任务跨平台累计)</span></div>
+                  <input class="input" id="globalLimit" type="number" min="0" max="1000" placeholder="留空=不限"
+                         style="font-size:13px">
+                </div>
+                <div>
+                  <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">同公司每日上限 <span style="color:var(--text-dim)">(跨平台 24h)</span></div>
+                  <input class="input" id="maxPerCompany" type="number" min="0" value="2"
+                         placeholder="0=关闭" style="font-size:13px">
+                </div>
+              </div>
+
+              <div style="font-size:11px;color:var(--text-muted);margin:8px 0 4px">
+                每日上限（按平台 · 24h 滚动 · 跨重启） <span style="color:var(--text-dim)">留空=该平台硬顶</span>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-bottom:4px">
+                <input class="input" id="dailyLimit_boss" type="number" min="0" placeholder="≤150"
+                       style="font-size:12px" title="Boss 每日硬顶 150">
+                <input class="input" id="dailyLimit_zhilian" type="number" min="0" placeholder="≤80"
+                       style="font-size:12px" title="智联 每日硬顶 80">
+                <input class="input" id="dailyLimit_job51" type="number" min="0" placeholder="≤120"
+                       style="font-size:12px" title="51 每日硬顶 120">
+                <input class="input" id="dailyLimit_liepin" type="number" min="0" placeholder="≤80"
+                       style="font-size:12px" title="猎聘 每日硬顶 80">
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;margin-bottom:8px;font-size:10px;color:var(--text-dim);text-align:center">
+                <span>Boss</span><span>智联</span><span>51</span><span>猎聘</span>
+              </div>
+
+              <div style="font-size:11px;color:var(--text-muted);margin:8px 0 4px">工作时间窗（小时）</div>
+              <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:6px;align-items:center;margin-bottom:4px">
+                <input class="input" id="activeHoursLo" type="number" min="0" max="23" value="9"
+                       placeholder="开始" style="font-size:13px">
+                <span style="font-size:12px;color:var(--text-muted)">→</span>
+                <input class="input" id="activeHoursHi" type="number" min="0" max="23" value="22"
+                       placeholder="结束" style="font-size:13px">
+              </div>
+              <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;line-height:1.5">
+                0-23 小时；窗外自动暂停。例：9 → 22 表示 9:00-22:00；22 → 6 支持跨午夜
+              </div>
+
+              <div style="font-size:11px;color:var(--text-muted);margin:8px 0 4px">Burst 长休 <span style="color:var(--text-dim)">(累计投 N 条 → 在 lo-hi 分钟之间随机歇一会儿，模拟真人节奏)</span></div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;align-items:center">
+                <input class="input" id="burstAfter" type="number" min="0" value="25"
+                       placeholder="投 N 条后" style="font-size:13px" title="累计投 N 条后强制长休">
+                <input class="input" id="burstMinutesLo" type="number" min="0" value="30"
+                       placeholder="休 lo 分钟" style="font-size:13px">
+                <input class="input" id="burstMinutesHi" type="number" min="0" value="90"
+                       placeholder="休 hi 分钟" style="font-size:13px">
+              </div>
+
+              <label style="display:flex;align-items:center;gap:8px;margin-top:12px;
+                            padding:8px 10px;background:var(--bg-surface);border-radius:var(--radius-xs);
+                            border:1px solid var(--border-subtle);cursor:pointer;font-size:13px"
+                     title="勾选后只走流程不真投，不消耗每日配额，用于核对筛选 / 招呼语">
+                <input type="checkbox" id="dryRun" style="margin:0">
+                <span>🧪 预演模式 <span style="color:var(--text-muted);font-size:12px">不真投，不消耗每日配额</span></span>
+              </label>
+
+              <label style="display:flex;align-items:center;gap:8px;margin-top:8px;
+                            padding:8px 10px;background:var(--bg-surface);border-radius:var(--radius-xs);
+                            border:1px solid var(--border-subtle);cursor:pointer;font-size:13px"
+                     title="开启后，过去 7 天内已真投过的同一岗位会被跳过，避免对同一 HR 重复打招呼。预演 / 跳过 / 失败的不算。">
+                <input type="checkbox" id="skipApplied" checked style="margin:0">
+                <span>🛡 跳过 7 天内已真投过的岗位 <span style="color:var(--text-muted);font-size:12px">(防重复打扰 HR · 推荐保持开启)</span></span>
+              </label>
             </div>
 
             <div class="field">
@@ -1989,6 +2128,9 @@
             </div>
           </div>
         </div>
+
+        <!-- 投递小结（任务完成后填充） -->
+        <div id="summaryPanel" class="summary-panel" style="display:none"></div>
 
         <!-- 结果筛选条 -->
         <div class="filter-bar">
@@ -2344,6 +2486,7 @@ async function loadTask(tid) {
   q('#historyPop')?.classList.remove('open');
   await loadRes(tid);
   await loadStats(tid);
+  loadSummary(tid);
   toast(`已加载任务 ${tid}`, 'ok');
 }
 
@@ -2575,6 +2718,60 @@ qa('input[name=modeSel]').forEach(r => r.addEventListener('change', () => {
 let CITY_DATA = { hot: [], provinces: {} };
 let selectedCities = [];
 
+// ========== 经验 / 学历 多选 ==========
+// 不选 = 不限；值必须与后端 _EXP_RANGE / 学历枚举完全一致
+let selectedExps = [];
+let selectedEdus = [];
+
+const MS_OPTS = {
+  exp: { arr: () => selectedExps, label: '经验不限',
+         items: [['应届生','应届生'],['1-3年','1–3 年'],['3-5年','3–5 年'],
+                 ['5-10年','5–10 年'],['10年以上','10 年以上']] },
+  edu: { arr: () => selectedEdus, label: '学历不限',
+         items: [['大专','大专'],['本科','本科'],['硕士','硕士'],['博士','博士']] },
+};
+
+function msRender(kind) {
+  const cfg = MS_OPTS[kind];
+  const arr = cfg.arr();
+  const pop = q('#' + kind + 'Pop');
+  pop.innerHTML = cfg.items.map(([val, text]) => {
+    const on = arr.includes(val);
+    return `<div class="ms-row${on ? ' active' : ''}" data-val="${val}" onclick="msPick('${kind}','${val}',event)">
+      <span class="ms-check">✓</span><span>${text}</span></div>`;
+  }).join('');
+  const lbl = q('#' + kind + 'Label');
+  if (!arr.length) { lbl.textContent = cfg.label; lbl.classList.add('placeholder'); }
+  else {
+    const texts = arr.map(v => (cfg.items.find(it => it[0] === v) || [v, v])[1]);
+    lbl.textContent = texts.length <= 2 ? texts.join('、') : `已选 ${texts.length} 项`;
+    lbl.classList.remove('placeholder');
+  }
+}
+
+function msToggle(kind, ev) {
+  if (ev) ev.stopPropagation();
+  const wrap = q('#' + kind + 'Ms');
+  const wasOpen = wrap.classList.contains('open');
+  document.querySelectorAll('.ms.open').forEach(w => w.classList.remove('open'));
+  if (!wasOpen) { msRender(kind); wrap.classList.add('open'); }
+}
+
+function msPick(kind, val, ev) {
+  if (ev) ev.stopPropagation();
+  const arr = MS_OPTS[kind].arr();
+  const i = arr.indexOf(val);
+  if (i >= 0) arr.splice(i, 1); else arr.push(val);
+  msRender(kind);  // keep popup open for multi-pick
+}
+
+// 点击外部关闭经验/学历下拉
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.ms')) {
+    document.querySelectorAll('.ms.open').forEach(w => w.classList.remove('open'));
+  }
+});
+
 async function loadCities() {
   try {
     const r = await fetch('/api/cities');
@@ -2735,6 +2932,23 @@ async function go() {
   };
   const platformLimits = {};
   for (const [k, v] of Object.entries(limMap)) if (v > 0) platformLimits[k] = v;
+
+  // 防封号 / 上限控制 字段读取（防御性 parse）
+  const globalLimitVal = parseInt(document.getElementById('globalLimit')?.value, 10);
+  const dryRunVal = document.getElementById('dryRun')?.checked || false;
+  const ahLo = parseInt(document.getElementById('activeHoursLo')?.value, 10);
+  const ahHi = parseInt(document.getElementById('activeHoursHi')?.value, 10);
+  const activeHours = (Number.isFinite(ahLo) && Number.isFinite(ahHi)) ? [ahLo, ahHi] : null;
+  const dailyLimits = {};
+  for (const k of ['boss','zhilian','job51','liepin']) {
+    const v = parseInt(document.getElementById('dailyLimit_'+k)?.value, 10);
+    if (Number.isFinite(v) && v >= 0) dailyLimits[k] = v;
+  }
+  const burstAfter = parseInt(document.getElementById('burstAfter')?.value, 10);
+  const burstLo = parseInt(document.getElementById('burstMinutesLo')?.value, 10);
+  const burstHi = parseInt(document.getElementById('burstMinutesHi')?.value, 10);
+  const maxPerCo = parseInt(document.getElementById('maxPerCompany')?.value, 10);
+
   const body = {
     keyword: keywords.length === 1 ? keywords[0] : null,
     keywords: keywords.length > 1 ? keywords : null,
@@ -2742,8 +2956,8 @@ async function go() {
     city: selectedCities.length === 1 ? selectedCities[0] : null,
     salary_min: q('#salMin').value ? +q('#salMin').value : null,
     salary_max: q('#salMax').value ? +q('#salMax').value : null,
-    experience: q('#exp').value || null,
-    education: q('#edu').value || null,
+    experiences: selectedExps.length ? selectedExps : null,
+    educations: selectedEdus.length ? selectedEdus : null,
     platforms: platforms(),
     auto_apply: true,
     greeting_template: greetingTpl,
@@ -2752,9 +2966,30 @@ async function go() {
     apply_rate: applyRate,
     llm_config: llmCfg,
   };
+  // 附加防封号字段（命名与后端 ScrapeRequest 对齐；payload 是 body 的别名，便于跨视角阅读）
+  const payload = body;
+  payload.global_limit = Number.isFinite(globalLimitVal) ? globalLimitVal : null;
+  payload.daily_limit_per_platform = Object.keys(dailyLimits).length ? dailyLimits : null;
+  payload.active_hours = activeHours;
+  payload.burst_pause_after = Number.isFinite(burstAfter) ? burstAfter : null;
+  payload.burst_pause_minutes = (Number.isFinite(burstLo) && Number.isFinite(burstHi)) ? [burstLo, burstHi] : null;
+  payload.max_per_company_per_day = Number.isFinite(maxPerCo) ? maxPerCo : null;
+  payload.dry_run = dryRunVal;
+  payload.skip_applied = document.getElementById('skipApplied')?.checked !== false;
+
   if (!body.platforms.length) {
     btn.disabled = false; btn.innerHTML = '<span>▶</span> 开始投递';
     return toast('至少选择一个平台', 'err');
+  }
+
+  // Preflight 预检确认（取消则中断）
+  const ok = await showPreflight(payload);
+  if (!ok) {
+    btn.disabled = false;
+    btn.innerHTML = '<span>▶</span> 开始投递';
+    q('#btnStop').style.display = 'none';
+    q('#statusLabel').textContent = '已取消';
+    return;
   }
 
   try {
@@ -2821,6 +3056,7 @@ async function poll(tid) {
         fin = true;
         if (d.error && d.status !== 'stopped') toast(_friendlyError(d.error), 'err');
         if (d.status === 'stopped') toast('已停止投递', 'ok');
+        loadSummary(tid);  // 任务终态：自动加载投递小结
       }
     } catch {
       errCount++;
@@ -2865,6 +3101,37 @@ async function loadStats(tid) {
     }
     q('#sCities').textContent = Object.keys(s.cities||{}).length;
   } catch { toast('加载统计失败', 'err'); }
+}
+
+// ========== 投递小结 ==========
+async function loadSummary(tid) {
+  if (!tid) return;
+  const panel = q('#summaryPanel');
+  if (!panel) return;
+  try {
+    const r = await fetch('/api/summary/' + tid);
+    const d = await r.json();
+    if (!d || !d.ok) { panel.style.display = 'none'; return; }
+    const applied = d.applied || 0, dryRun = d.dry_run || 0;
+    const skipped = d.skipped || 0, failed = d.failed || 0, total = d.total || 0;
+    const headParts = [];
+    if (dryRun > 0) headParts.push(`预演 ${dryRun}`);
+    if (applied > 0 || dryRun === 0) headParts.push(`投递 ${applied}`);
+    headParts.push(`跳过 ${skipped}`, `失败 ${failed}`);
+    const head = `${headParts.join(' · ')}（共 ${total}）`;
+
+    const reasons = d.skip_reasons || {};
+    const sorted = Object.entries(reasons).sort((a, b) => b[1] - a[1]);
+    let reasonHtml = '';
+    if (sorted.length) {
+      const parts = sorted.map(([k, v]) => `${esc(k)} <b>${v}</b>`).join(' · ');
+      reasonHtml = `<div class="sum-reasons">跳过原因：${parts}</div>`;
+    }
+    panel.innerHTML = `<div class="sum-head">投递小结 · ${esc(head)}</div>${reasonHtml}`;
+    panel.style.display = 'block';
+  } catch {
+    panel.style.display = 'none';
+  }
 }
 
 // ========== TABLE ==========
@@ -3055,7 +3322,10 @@ qa('.tbl th[data-sort]').forEach(th => {
 // ========== RESET ==========
 function reset() {
   q('#kw').value=''; q('#salMin').value=''; q('#salMax').value='';
-  q('#exp').value=''; q('#edu').value='';
+  // 重置经验/学历多选
+  selectedExps = []; selectedEdus = [];
+  document.querySelectorAll('.ms.open').forEach(w => w.classList.remove('open'));
+  if (typeof msRender === 'function') { msRender('exp'); msRender('edu'); }
   // 重置城市多选
   selectedCities = [];
   renderCityPanel(); renderCitySelected();
@@ -3078,6 +3348,7 @@ function reset() {
   resetFilters();
   clearLogs();
   const lp = q('#logPanel'); if (lp) { lp.style.display = 'none'; lp.classList.remove('open'); }
+  const sp = q('#summaryPanel'); if (sp) { sp.style.display = 'none'; sp.innerHTML = ''; }
   jobs=[]; rowMap.clear(); taskId=null; renderTbl();
   ['boss','zhilian','job51','liepin'].forEach(k=>setProg(k,0,'waiting'));
   q('#sTotal').textContent='—'; q('#sApplied').textContent='—';
@@ -4550,6 +4821,67 @@ function pjGoPage(p) {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)) }
 document.addEventListener('keydown', e => { if (e.key==='Enter'&&e.ctrlKey) { e.preventDefault(); go() } });
+
+// ========== PREFLIGHT MODAL ==========
+async function showPreflight(payload) {
+    const modal = document.getElementById('preflightModal');
+    const body  = document.getElementById('preflightBody');
+    const warn  = document.getElementById('preflightWarnings');
+    if (!modal || !body || !warn) {
+        // 模态不存在时降级直放（不阻塞投递）
+        return true;
+    }
+    body.textContent = '加载中...';
+    warn.textContent = '';
+    modal.style.display = 'flex';
+    try {
+        const r = await fetch('/api/preflight', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || '预检失败');
+        const lines = [];
+        const platCount = (data.platforms || []).length;
+        lines.push(`本任务将向 <b>${platCount}</b> 个平台共投 <b>${data.total_estimate ?? '?'}</b> 份`);
+        lines.push(`预计耗时 ~<b>${data.eta_minutes ?? '?'}</b> 分钟，组合数 <b>${data.combos ?? '?'}</b>`);
+        if (data.active_hours_now === false) {
+            lines.push('<span style="color:#c0392b;">⏰ 当前不在工作时间窗内（任务会进入等待）</span>');
+        }
+        if (data.dry_run) {
+            lines.push('<span style="color:#27ae60;">🧪 预演模式（不真投，只走流程）</span>');
+        }
+        for (const p of (data.platforms || [])) {
+            lines.push(`<small style="color:var(--text-muted);font-family:var(--font-mono)">`
+                + `${p.platform}: 已投 ${p.applied_today ?? 0} | 预估 ${p.estimated_remaining ?? '?'} | 硬上限 ${p.hard_cap ?? '?'}`
+                + `</small>`);
+        }
+        body.innerHTML = lines.join('<br>');
+        warn.innerHTML = (data.warnings || []).map(w => '⚠️ ' + w).join('<br>');
+    } catch (e) {
+        body.textContent = '预检失败: ' + (e.message || e) + '（仍可点继续直接投递）';
+    }
+    return new Promise((resolve) => {
+        const cancelBtn = document.getElementById('preflightCancel');
+        const confirmBtn = document.getElementById('preflightConfirm');
+        const cleanup = () => { modal.style.display = 'none'; };
+        cancelBtn.onclick = () => { cleanup(); resolve(false); };
+        confirmBtn.onclick = () => { cleanup(); resolve(true); };
+    });
+}
 </script>
+<!-- ========== PREFLIGHT MODAL HTML ========== -->
+<div id="preflightModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;align-items:center;justify-content:center;">
+  <div style="background:var(--bg-raised,#fff);color:var(--text-main,#222);padding:24px;border-radius:8px;max-width:520px;width:90%;box-shadow:0 12px 32px rgba(0,0,0,0.25);border:1px solid var(--border-base,#ddd);">
+    <h3 style="margin:0 0 12px 0;font-size:18px;">🔍 投递预览</h3>
+    <div id="preflightBody" style="font-size:14px;line-height:1.6;"></div>
+    <div id="preflightWarnings" style="margin-top:12px;color:#c0392b;font-size:13px;"></div>
+    <div style="margin-top:20px;display:flex;gap:8px;justify-content:flex-end;">
+      <button type="button" id="preflightCancel" style="padding:8px 16px;border:1px solid var(--border-base,#ccc);background:transparent;color:var(--text-main,#222);border-radius:4px;cursor:pointer;">取消</button>
+      <button type="button" id="preflightConfirm" style="padding:8px 16px;background:var(--accent,#1a1814);color:#fff;border:none;border-radius:4px;cursor:pointer;">继续投递</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

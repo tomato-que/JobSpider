@@ -57,6 +57,10 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
         self.engine = ScraplingEngine.get_instance()
         # 反爬 / 选择器漂移导致的连续失败计数（成功 1 页即清零）
         self._consecutive_failures = 0
+        # Stop & global-limit hooks (injected by server / master agent)
+        self._stop_check = None        # Callable[[], bool] — returns True if user requested stop
+        self._global_limit = None      # int | None — task-level total cap across all platforms
+        self._global_count_fn = None   # Callable[[], int] — returns current global applied total
 
     def set_progress_callback(self, cb: Callable):
         self._progress_cb = cb
@@ -68,6 +72,34 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
     def set_log_callback(self, cb: Callable):
         """注入日志回调：cb(message: str) — 投递决策、招呼语等实时推到前端"""
         self._log_cb = cb
+
+    def set_stop_check(self, fn):
+        """Inject a callable returning True when the user wants the task to stop.
+        Called sync from inside the per-job loop — must be cheap and non-blocking.
+        """
+        self._stop_check = fn
+
+    def set_global_limit(self, limit, count_fn):
+        """Inject task-level global cap (across all platforms/combos).
+        limit: int (None = unlimited)
+        count_fn: () -> int returning current global applied total
+        """
+        self._global_limit = limit
+        self._global_count_fn = count_fn
+
+    def should_stop(self) -> bool:
+        """Sync helper: True if user requested stop OR global cap reached.
+        Safe to call from anywhere in the apply/scrape loops. Returns False on any error.
+        """
+        try:
+            if self._stop_check and self._stop_check():
+                return True
+            if self._global_limit is not None and self._global_count_fn:
+                if self._global_count_fn() >= self._global_limit:
+                    return True
+        except Exception:
+            return False
+        return False
 
     def log(self, msg: str):
         """打印 + 推送到前端日志面板"""
@@ -112,7 +144,23 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
             return None
 
     def limit_reached(self, params) -> bool:
-        """检查是否已达本平台投递上限（用于让 scrape 循环提前结束翻页）"""
+        """检查是否已达投递上限：
+        - 平台级 platform_limits[self.platform_key]
+        - 任务级 global_limit (跨平台总上限)
+        - 平台 24h DB 日上限 daily_limit_per_platform (由 apply_to_page_jobs 命中时设 _platform_done)
+        任一命中即返回 True，让 scrape 主循环提前结束翻页。
+        """
+        # 由 apply_to_page_jobs 设置：本平台所有上限闸已命中（含 DB 24h 日上限）
+        if getattr(self, "_platform_done", False):
+            return True
+        # 全局上限
+        if self._global_limit is not None and self._global_count_fn:
+            try:
+                if self._global_count_fn() >= self._global_limit:
+                    return True
+            except Exception:
+                pass
+        # 平台上限
         limit = self.get_platform_limit(params)
         if limit is None:
             return False
@@ -162,6 +210,13 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
 
         self.log(f"  [{name}] opening search page...")
         try:
+            if self.should_stop():
+                self.log(f"  [{name}] 用户停止（启动前）")
+                return ScrapeResult(
+                    platform=self.platform_key, platform_name=name,
+                    status=ScrapeStatus.SKIPPED, total_count=0,
+                    jobs=[], error_message="用户停止",
+                )
             page = await self._do_search(params)
 
             await asyncio.sleep(gaussian_delay(2, 4))
@@ -237,6 +292,9 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
 
             for _ in range(2, MAX_PAGES_PER_PLATFORM + 1):
                 if not page_jobs:
+                    break
+                if self.should_stop():
+                    self.log(f"  [{name}] 用户停止，结束抓取")
                     break
                 if self.limit_reached(params):
                     break
@@ -318,7 +376,12 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
         if pre_err:
             raise RuntimeError(pre_err)
         if params.city:
-            await self._select_city(page, params.city)
+            self.log(f"  [{self.platform_cfg['name']}] 🌐 正在筛选城市: {params.city} ...")
+            city_ok = await self._select_city(page, params.city)
+            if city_ok:
+                self.log(f"  [{self.platform_cfg['name']}] ✓ 城市已选: {params.city}")
+            else:
+                self.log(f"  [{self.platform_cfg['name']}] ⚠ 城市筛选失败（可能 UI 变更或不支持），将使用平台默认城市抓取")
         filled = await self.input_keyword(
             page, params.keyword, self.SEARCH_INPUT_SELECTORS,
         )

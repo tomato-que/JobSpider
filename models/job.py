@@ -32,6 +32,26 @@ class SearchParams:
     platform_limits: dict = field(default_factory=dict)  # {"boss": 10, "zhilian": 5, ...}
     # 投递速率：slow / normal / fast / turbo
     apply_rate: str = "normal"
+    # 全局/每日上限（防封号）
+    global_limit: Optional[int] = None              # 整个任务全局投递上限（跨平台跨组合），None=不限
+    daily_limit_per_platform: dict = field(default_factory=dict)
+                                                    # {"boss": 100, ...} — 每个平台每 24h 滚动窗口的投递上限
+                                                    # 与 platform_limits 不同：daily_limit 由 DB 历史聚合得出，跨任务/跨重启生效
+    # 工作时间窗（24h制，闭区间）— 默认 (9, 22) 即 9:00-22:00 投递；None=全天
+    active_hours: Optional[tuple] = None
+    # Burst 长休：累计投递 N 条后强制歇 30-90 分钟
+    burst_pause_after: Optional[int] = None         # None=禁用
+    burst_pause_minutes: tuple = (30, 90)           # (lo, hi) 分钟，gaussian 抽样
+    # 同公司每日最多投几个不同岗位（避免对同一公司刷屏）
+    max_per_company_per_day: Optional[int] = None   # None=不限
+    # 预演模式：跑完全流程但不点真按钮，apply_status 标 "dry_run"
+    dry_run: bool = False
+    # 经验/学历多选（OR 语义：命中任一即放行）。空列表=不限。
+    # 与旧的单值 experience/education 共存：_filters.py 会优先用列表，列表为空时回退到单值。
+    experiences: list = field(default_factory=list)   # 如 ["1-3年", "5-10年"]
+    educations: list = field(default_factory=list)    # 如 ["本科", "硕士"]
+    # 跨任务去重：True=跳过 7 天内已真实投递过的同一 job_id（防重复打招呼/防配额浪费）
+    skip_applied: bool = True
 
     def to_dict(self) -> dict:
         return {k: v for k, v in asdict(self).items() if v is not None and v != {}}
@@ -88,7 +108,7 @@ class JobInfo:
 
     # 投递状态
     applied: bool = False                             # 是否已投递
-    apply_status: Optional[str] = None                # applied/skipped/failed/login_required
+    apply_status: Optional[str] = None                # applied/skipped/failed/login_required/dry_run
     greeting_sent: Optional[str] = None               # 发送的打招呼语
     apply_skip_reason: Optional[str] = None           # 跳过/失败原因（如 LLM 规则匹配）
 

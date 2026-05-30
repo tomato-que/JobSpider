@@ -49,6 +49,38 @@ class LiepinAgent(BaseAgent):
                 && window.getComputedStyle(m).display !== 'none';
         }"""))
 
+    async def _check_anti_bot(self, page) -> bool:
+        try:
+            url = await self.engine.current_url(page)
+            if any(k in (url or "").lower() for k in ("captcha", "verify", "safety")):
+                self.log(f"  [猎聘] 🚨 anti-bot URL detected: {url[:80]}")
+                return True
+            hit = await self.eval_js(page, """() => {
+                const sel = [
+                    '.geetest_panel', '.geetest_holder', '.geetest_box',
+                    '.verify-modal', '.captcha-popup', '.captcha-box',
+                    '[class*="captcha"]',
+                    '.login-modal.show', '.login-pop.show', '.com-login.show',
+                ];
+                for (const s of sel) {
+                    const el = document.querySelector(s);
+                    if (el && el.offsetParent !== null
+                        && el.offsetWidth > 50 && el.offsetHeight > 50) {
+                        return el.className || s;
+                    }
+                }
+                const body = (document.body?.innerText || '').slice(0, 4000);
+                if (/请完成.{0,4}验证|滑动.{0,4}验证|安全验证|系统检测到|访问过于频繁/.test(body))
+                    return 'text_match';
+                return '';
+            }""")
+            if hit:
+                self.log(f"  [猎聘] 🚨 anti-bot DOM: {hit}")
+                return True
+        except Exception as e:
+            print(f"  [猎聘 anti-bot check] {e}", flush=True)
+        return False
+
     async def _select_city(self, page, city: str) -> bool:
         """猎聘城市选择：点击搜索页上方的城市链接（全国/北京/上海...）"""
         safe_city = city.replace("'", "\\'")

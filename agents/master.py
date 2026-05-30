@@ -40,6 +40,19 @@ class MasterAgent:
         self._job_cb = job_callback
         self._log_cb = log_callback
         self._llm: LLMExtractor | None = None
+        # 防封号 / 上限 hooks — 由 server 注入，run() 时转发给每个子智能体
+        self._stop_check = None
+        self._global_limit = None
+        self._global_count_fn = None
+
+    def set_stop_check(self, fn):
+        """注入"用户是否请求停止"的回调，run() 时转发给所有子智能体。"""
+        self._stop_check = fn
+
+    def set_global_limit(self, limit, count_fn):
+        """注入任务级全局投递上限 (跨平台)，run() 时转发给所有子智能体。"""
+        self._global_limit = limit
+        self._global_count_fn = count_fn
 
     def _normalize_params(self, params: SearchParams) -> SearchParams:
         if not params.keyword or not params.keyword.strip():
@@ -132,9 +145,11 @@ class MasterAgent:
 
         # 并行启动所有子智能体（注入 LLM 提取器）
         tasks = []
+        sub_agents = []  # 保留引用，便于 wrap 全局计数函数把实时 _applied_total 算进来
         for platform_key in self.params.platforms:
             agent_cls = self.AGENT_MAP[platform_key]
             agent = agent_cls()
+            sub_agents.append(agent)
             if self._progress_cb:
                 agent.set_progress_callback(self._progress_cb)
             if self._job_cb:
@@ -144,6 +159,24 @@ class MasterAgent:
             # 注入 LLM 提取器
             if self._llm:
                 agent.set_llm_extractor(self._llm)
+            # 转发防封号 / 上限 hooks 给子智能体
+            if self._stop_check and hasattr(agent, "set_stop_check"):
+                agent.set_stop_check(self._stop_check)
+            if self._global_limit is not None and hasattr(agent, "set_global_limit"):
+                # 包装：原 fn 是上一组合结束时的快照；额外把所有正在跑的子 agent
+                # 当前 _applied_total 加上，避免单次组合内全局上限漏报。
+                base_fn = self._global_count_fn or (lambda: 0)
+                def _live_global_count_fn(_agents=sub_agents, _base=base_fn):
+                    try:
+                        live = sum(getattr(a, "_applied_total", 0) for a in _agents)
+                    except Exception:
+                        live = 0
+                    try:
+                        snap = _base()
+                    except Exception:
+                        snap = 0
+                    return snap + live
+                agent.set_global_limit(self._global_limit, _live_global_count_fn)
             tasks.append(agent.scrape(self.params))
 
         sem = asyncio.Semaphore(MAX_CONCURRENT_PLATFORMS)

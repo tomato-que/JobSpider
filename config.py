@@ -1,7 +1,18 @@
 """全局配置文件 - 基于真实平台逆向工程经验"""
 import os
 import random
+import sys
 from pathlib import Path
+
+# 强制 stdout/stderr 使用 UTF-8（errors=replace）— 否则在 Windows GBK 控制台
+# 或 stdout 被重定向（如 uvicorn 后台运行）时，日志里的 emoji（✓✗◐⏸🚨 等）
+# 会触发 UnicodeEncodeError 直接中断投递任务。config 被几乎所有模块最早导入，
+# 在此 reconfigure 可覆盖全进程的打印路径。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # 加载 .env 文件
 _ENV_FILE = Path(__file__).parent / ".env"
@@ -125,3 +136,48 @@ def gaussian_delay(min_delay: float = 1.0, max_delay: float = 5.0) -> float:
     """高斯抖动延迟 — 模拟人类操作间隔"""
     delay = random.gauss(GAUSSIAN_JITTER_MEAN, GAUSSIAN_JITTER_STD)
     return max(min_delay, min(max_delay, delay))
+
+
+# 平台每 24h 滚动窗口的"硬上限"（参考各平台公开/经验数据）
+# server.py 在 /api/scrape 接收 platform_limits 时会把每平台值 clamp 到此上限，避免用户误填导致封号
+PLATFORM_DAILY_HARD_CAP = {
+    "boss":    150,   # Boss 直聘官方每日招呼 150 条
+    "zhilian":  80,   # 智联约 80-150 (取下限保守)
+    "job51":   120,   # 51job 约 100-200 (取中位)
+    "liepin":   80,   # 猎聘约 80
+}
+
+# 工作时间窗：默认推荐值 — 9:00-22:00 投递更像真人，半夜投递是强 bot 信号
+DEFAULT_ACTIVE_HOURS = (9, 22)
+
+# Burst 默认参数
+DEFAULT_BURST_PAUSE_AFTER = 25       # 每投 25 条进入长休
+DEFAULT_BURST_PAUSE_MINUTES = (30, 90)
+
+
+def is_within_active_hours(active_hours) -> bool:
+    """判断当前小时是否在投递窗口内。
+    active_hours 为 None 或假值 → 全天投递（True）
+    active_hours = (lo, hi) 闭区间，跨午夜也支持（hi < lo 表示 22-6 这种）
+    """
+    if not active_hours:
+        return True
+    try:
+        lo, hi = int(active_hours[0]), int(active_hours[1])
+    except Exception:
+        return True
+    from datetime import datetime
+    h = datetime.now().hour
+    if lo <= hi:
+        return lo <= h <= hi
+    # 跨午夜
+    return h >= lo or h <= hi
+
+
+def gaussian_minutes(lo_min: float, hi_min: float) -> float:
+    """供 burst pause 等场景使用 — 高斯抽样的分钟数，clamp 到 [lo,hi]。"""
+    import random
+    mean = (lo_min + hi_min) / 2.0
+    std = (hi_min - lo_min) / 4.0
+    val = random.gauss(mean, std)
+    return max(lo_min, min(hi_min, val))

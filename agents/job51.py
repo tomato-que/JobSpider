@@ -51,12 +51,38 @@ class Job51Agent(BaseAgent):
         }"""))
 
     async def _check_anti_bot(self, page) -> bool:
-        return bool(await self.eval_js(page, """() => {
-            const t = document.title;
-            const b = document.body?.innerText || '';
-            return t.includes('验证') || t.includes('拦截')
-                || b.includes('访问太频繁');
-        }"""))
+        try:
+            url = await self.engine.current_url(page)
+            if any(k in (url or "").lower() for k in ("captcha", "verify", "wapsec")):
+                self.log(f"  [前程无忧] 🚨 anti-bot URL detected: {url[:80]}")
+                return True
+            hit = await self.eval_js(page, """() => {
+                const sel = [
+                    '.swiper-wrapper.captcha', '.verify-slider',
+                    '.yidun_modal', '.yidun-popup', '.verify-wrap',
+                    '.captcha-box', '[class*="captcha"]',
+                    '.login-dialog.show', '.qs-dialog-login.show',
+                ];
+                for (const s of sel) {
+                    const el = document.querySelector(s);
+                    if (el && el.offsetParent !== null
+                        && el.offsetWidth > 50 && el.offsetHeight > 50) {
+                        return el.className || s;
+                    }
+                }
+                const t = document.title || '';
+                if (t.includes('验证') || t.includes('拦截')) return 'title:' + t.slice(0, 30);
+                const body = (document.body?.innerText || '').slice(0, 4000);
+                if (/请完成.{0,4}验证|滑动.{0,4}验证|安全验证|系统检测到|访问过于频繁|访问太频繁/.test(body))
+                    return 'text_match';
+                return '';
+            }""")
+            if hit:
+                self.log(f"  [前程无忧] 🚨 anti-bot DOM: {hit}")
+                return True
+        except Exception as e:
+            print(f"  [51job anti-bot check] {e}", flush=True)
+        return False
 
     async def apply_to_job(self, page, job, greeting, params) -> bool:
         """前程无忧: 点击对应职位卡片的"申请/投递"按钮

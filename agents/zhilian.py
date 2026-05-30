@@ -47,6 +47,38 @@ class ZhilianAgent(BaseAgent):
             return false;
         }"""))
 
+    async def _check_anti_bot(self, page) -> bool:
+        try:
+            url = await self.engine.current_url(page)
+            if any(k in (url or "").lower() for k in ("captcha", "verify", "secure")):
+                self.log(f"  [智联招聘] 🚨 anti-bot URL detected: {url[:80]}")
+                return True
+            hit = await self.eval_js(page, """() => {
+                const sel = [
+                    '.captcha-mask', '.verify-mask', '.geetest_holder',
+                    '.geetest_panel', '.nc_iconfont', '.nc-container',
+                    '.captcha-box', '[class*="captcha"]',
+                    '.zppp-modal__login.show', '.sign-dialog.show',
+                ];
+                for (const s of sel) {
+                    const el = document.querySelector(s);
+                    if (el && el.offsetParent !== null
+                        && el.offsetWidth > 50 && el.offsetHeight > 50) {
+                        return el.className || s;
+                    }
+                }
+                const body = (document.body?.innerText || '').slice(0, 4000);
+                if (/请完成.{0,4}验证|滑动.{0,4}验证|安全验证|系统检测到|访问过于频繁/.test(body))
+                    return 'text_match';
+                return '';
+            }""")
+            if hit:
+                self.log(f"  [智联招聘] 🚨 anti-bot DOM: {hit}")
+                return True
+        except Exception as e:
+            print(f"  [智联 anti-bot check] {e}", flush=True)
+        return False
+
     async def _select_city(self, page, city: str) -> bool:
         """智联城市选择：点击'地点'筛选器 → 选择城市"""
         safe_city = city.replace("'", "\\'")

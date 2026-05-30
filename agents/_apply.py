@@ -189,6 +189,23 @@ class ApplyMixin:
                   flush=True)
             return 0
 
+        # ── Anti-ban guard: active_hours ──
+        try:
+            from config import is_within_active_hours
+            active_hours = getattr(params, "active_hours", None)
+            if active_hours and not is_within_active_hours(active_hours):
+                from datetime import datetime as _dt
+                h = _dt.now().hour
+                self.log(f"  [{self.platform_cfg['name']}] ⏸ 工作时间外暂停 "
+                         f"(now={h}h, window={active_hours[0]}-{active_hours[1]}h)")
+                for job in jobs:
+                    job.apply_status = "skipped"
+                    job.apply_skip_reason = "工作时间外"
+                    self.emit_job(job, "update")
+                return 0
+        except Exception as _e:
+            print(f"  [active_hours check] {_e}", flush=True)
+
         # 平台投递上限（保存在实例上累计）
         if not hasattr(self, "_applied_total"):
             self._applied_total = 0
@@ -227,14 +244,79 @@ class ApplyMixin:
             self.log(f"  [{name}] 开始投递本页 {len(jobs)} 个职位 "
                   f"(速率={rate_label} {rate_lo:.0f}-{rate_hi:.0f}s)...")
 
+        # ── Anti-ban guard: daily DB cap & burst init ──
+        _db_applied_today = 0
+        daily_caps = getattr(params, "daily_limit_per_platform", {}) or {}
+        daily_cap_for_me = None
+        try:
+            raw_daily = daily_caps.get(self.platform_key) if isinstance(daily_caps, dict) else None
+            if raw_daily is not None:
+                daily_cap_for_me = max(0, int(raw_daily))
+        except Exception:
+            daily_cap_for_me = None
+
+        if daily_cap_for_me is not None:
+            try:
+                from core import db as _db
+                _db_applied_today = await _db.count_applied_in_window(self.platform_key, 24)
+            except Exception as _e:
+                print(f"  [daily_cap fetch] {_e}", flush=True)
+                _db_applied_today = 0
+            self.log(f"  [{name}] DB 历史: 24h 已投 {_db_applied_today}/{daily_cap_for_me}")
+            if _db_applied_today >= daily_cap_for_me:
+                reason = f"今日累计已达日上限(DB {_db_applied_today}/{daily_cap_for_me} · 24h)"
+                self.log(f"  [{name}] ⏸ {reason}，停止本平台后续投递")
+                # 标记前 N 条便于用户看到原因；其余 job 直接退出，不再污染统计
+                MARK_LIMIT = 5
+                for j in jobs[:MARK_LIMIT]:
+                    j.apply_status = "skipped"
+                    j.apply_skip_reason = reason
+                    self.emit_job(j, "update")
+                self._platform_done = True
+                return 0
+
+        # Burst & consecutive-fail counters (instance-level, persist across pages)
+        if not hasattr(self, "_applied_burst_count"):
+            self._applied_burst_count = 0
+        if not hasattr(self, "_consecutive_apply_failures"):
+            self._consecutive_apply_failures = 0
+
+        burst_after = getattr(params, "burst_pause_after", None)
+        burst_minutes = getattr(params, "burst_pause_minutes", (30, 90))
+        max_per_company = getattr(params, "max_per_company_per_day", None)
+        dry_run = bool(getattr(params, "dry_run", False))
+        skip_applied = bool(getattr(params, "skip_applied", True))
+
         for job in jobs:
-            # 平台上限检查
-            if platform_limit is not None and self._applied_total >= platform_limit:
+            # ── Stop responsiveness (top of loop) ──
+            should_stop_fn = getattr(self, "should_stop", None)
+            if callable(should_stop_fn):
+                try:
+                    if should_stop_fn():
+                        job.apply_status = "skipped"
+                        job.apply_skip_reason = "用户停止"
+                        skipped_count += 1
+                        self.emit_job(job, "update")
+                        continue
+                except Exception:
+                    pass
+
+            # 平台上限检查 — 命中即停止本平台后续页（不再继续标剩余 job 为 skipped）
+            db_remaining = (daily_cap_for_me - _db_applied_today - applied_count) if daily_cap_for_me is not None else None
+            hit_platform = platform_limit is not None and self._applied_total >= platform_limit
+            hit_daily_db = db_remaining is not None and db_remaining <= 0
+            if hit_platform or hit_daily_db:
+                reason = (f"本任务平台投递上限({self._applied_total}/{platform_limit})" if hit_platform else
+                          f"今日累计已达日上限(DB {_db_applied_today + applied_count}/{daily_cap_for_me} · 24h)")
+                self.log(f"  [{name}] ⏸ {reason}，停止本平台后续投递")
+                # 标记当前这条 job 为 skipped 以便用户看到原因，剩余 job 直接 break
                 job.apply_status = "skipped"
-                job.apply_skip_reason = f"已达平台上限({platform_limit})"
+                job.apply_skip_reason = reason
                 skipped_count += 1
                 self.emit_job(job, "update")
-                continue
+                # 设置平台终止标志，让外层 scrape() 翻页循环也能看到
+                self._platform_done = True
+                break
 
             matched, why = self.job_matches_filters(job, params)
             if not matched:
@@ -244,6 +326,35 @@ class ApplyMixin:
                 self.emit_job(job, "update")
                 self.log(f"  [{name}] ⊘ 筛选跳过: {job.job_title} @ {job.company_name} ({why})")
                 continue
+
+            # ── Anti-ban guard: max_per_company_per_day ──
+            if max_per_company and job.company_name:
+                try:
+                    from core import db as _db
+                    co_count = await _db.count_company_applied_today(job.company_name, 24)
+                    if co_count >= max_per_company:
+                        job.apply_status = "skipped"
+                        job.apply_skip_reason = f"同公司今日已投{co_count}次"
+                        skipped_count += 1
+                        self.emit_job(job, "update")
+                        self.log(f"  [{name}] ⊘ 同公司限额: {job.job_title} @ {job.company_name}")
+                        continue
+                except Exception as _e:
+                    print(f"  [max_per_company] {_e}", flush=True)
+
+            # ── Anti-ban guard: 跨任务去重（7天内真实投递过的同一岗位不再投，防重复打招呼）──
+            if skip_applied and job.job_id:
+                try:
+                    from core import db as _db
+                    if await _db.has_applied_before(self.platform_key, job.job_id, 168):
+                        job.apply_status = "skipped"
+                        job.apply_skip_reason = "历史已投(7天内)"
+                        skipped_count += 1
+                        self.emit_job(job, "update")
+                        self.log(f"  [{name}] ⊘ 历史已投: {job.job_title} @ {job.company_name}")
+                        continue
+                except Exception as _e:
+                    print(f"  [skip_applied] {_e}", flush=True)
 
             # LLM 规则筛选
             if params.exclude_rules and self._llm:
@@ -276,6 +387,35 @@ class ApplyMixin:
                     print(f"  [{name}] LLM 规则判断失败 (放行): {e}", flush=True)
 
             try:
+                # ── Stop responsiveness (right before apply) ──
+                if callable(should_stop_fn):
+                    try:
+                        if should_stop_fn():
+                            job.apply_status = "skipped"
+                            job.apply_skip_reason = "用户停止"
+                            skipped_count += 1
+                            self.emit_job(job, "update")
+                            break
+                    except Exception:
+                        pass
+
+                # ── Dry-run short-circuit ──
+                if dry_run:
+                    greeting_dr = await self.generate_greeting(job, job.job_title or "", params)
+                    job.apply_status = "dry_run"
+                    job.greeting_sent = greeting_dr
+                    job.applied = False
+                    self._applied_total += 1
+                    applied_count += 1
+                    self.log(f"  [{name}] ◐ dry_run ({self._applied_total}): "
+                             f"{job.job_title} @ {job.company_name}")
+                    self.emit_job(job, "update")
+                    if platform_limit is not None and self._applied_total >= platform_limit:
+                        self.log(f"  [{name}] dry_run 已达上限 {platform_limit}，停止")
+                        break
+                    await asyncio.sleep(gaussian_delay(rate_lo, rate_hi))
+                    continue
+
                 # 获取完整 JD：LLM 可用时打开详情页提取，否则跳过直接投递
                 jd_text = ""
                 if self._llm:
@@ -314,17 +454,41 @@ class ApplyMixin:
                     job.greeting_sent = greeting
                     applied_count += 1
                     self._applied_total += 1
+                    self._applied_burst_count += 1
+                    self._consecutive_apply_failures = 0
                     self.log(f"  [{name}] ✓ applied ({self._applied_total}): "
                           f"{job.job_title} @ {job.company_name}")
                     self.emit_job(job, "update")
                     if platform_limit is not None and self._applied_total >= platform_limit:
                         self.log(f"  [{name}] 已达平台投递上限 {platform_limit}，停止投递")
                         break
+                    # Burst pause
+                    if burst_after and self._applied_burst_count >= int(burst_after):
+                        try:
+                            from config import gaussian_minutes
+                            lo, hi = burst_minutes if isinstance(burst_minutes, (tuple, list)) and len(burst_minutes) == 2 else (30, 90)
+                            pause_min = gaussian_minutes(float(lo), float(hi))
+                            self.log(f"  [{name}] ⏳ Burst pause: 已投 {self._applied_burst_count} 条，"
+                                     f"长休 {pause_min:.1f} 分钟（防封号）")
+                            self._applied_burst_count = 0
+                            await asyncio.sleep(pause_min * 60)
+                        except Exception as _e:
+                            print(f"  [burst_pause] {_e}", flush=True)
                 else:
                     job.apply_status = "failed"
                     failed_count += 1
                     self.log(f"  [{name}] ✗ apply_failed: {job.job_title} @ {job.company_name}")
                     self.emit_job(job, "update")
+                    self._consecutive_apply_failures += 1
+                    if self._consecutive_apply_failures >= 3:
+                        self.log(f"  [{name}] ⚠ 连续 {self._consecutive_apply_failures} 次投递失败，触发冷却")
+                        cooldown_fn = getattr(self, "_cooldown_after_failure", None)
+                        if callable(cooldown_fn):
+                            try:
+                                await cooldown_fn(reason="apply_failed_streak")
+                            except Exception as _e:
+                                print(f"  [cooldown_after_failure] {_e}", flush=True)
+                        break  # 停止本页投递
                 await asyncio.sleep(gaussian_delay(rate_lo, rate_hi))
             except Exception as e:
                 job.apply_status = "failed"
