@@ -6,13 +6,13 @@ import re
 import uuid
 from collections import OrderedDict
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import (FastAPI, WebSocket, WebSocketDisconnect, Query,
+                     HTTPException, Request, UploadFile, File)
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from models.job import SearchParams
@@ -29,12 +29,9 @@ from core.public_jobs_service import (
 _enricher = PublicJobsEnricher()
 _scorer = PublicJobsScorer()
 
-# 每请求 LLM 配置覆盖（替代 os.environ 全局变量污染，避免并发请求互相覆盖）
-_request_llm_config: ContextVar[Optional[dict]] = ContextVar(
-    "_request_llm_config", default=None)
-
-# /api/config POST 鉴权 token（未设置时自动生成随机 token）
+# /api/config POST 鉴权 token（未设置时自动生成本机临时 token）
 JOBSPIDER_TOKEN = os.getenv("JOBSPIDER_TOKEN", "")
+_TOKEN_FROM_ENV = bool(JOBSPIDER_TOKEN)
 if not JOBSPIDER_TOKEN:
     import secrets
     JOBSPIDER_TOKEN = secrets.token_hex(16)
@@ -62,6 +59,11 @@ async def _lifespan(app: FastAPI):
     finally:
         # shutdown
         await db.close_db()
+        try:
+            from sources._http import close_client
+            await close_client()
+        except Exception:
+            pass
         # 释放共享浏览器（如果被 MOHRSS 等源拉起过）
         try:
             from sources._browser import close_browser
@@ -107,7 +109,7 @@ def _purge_old_output_files(days: int = 7):
         print(f"  [Cleanup] 清理 {count} 个超过 {days} 天的输出文件", flush=True)
 
 
-app = FastAPI(title="Job Scraper", version="2.0.0", lifespan=_lifespan)
+app = FastAPI(title="Job Scraper", version="2.2.0", lifespan=_lifespan)
 
 # M10: CORS — 默认只允许本机来源
 from fastapi.middleware.cors import CORSMiddleware
@@ -190,6 +192,7 @@ class ScrapeRequest(BaseModel):
     exclude_rules: Optional[str] = None        # LLM 解析的排除规则
     platform_limits: Optional[dict] = None     # {"boss": 10, "zhilian": 5, ...}
     apply_rate: Optional[str] = "normal"       # slow / normal / fast / turbo
+    # 仅作前端预检提示/日志用；真正生效的 LLM 配置在 .env（由 /api/config 写入）
     llm_config: Optional[dict] = None
     global_limit: Optional[int] = None
     daily_limit_per_platform: Optional[dict] = None
@@ -198,6 +201,7 @@ class ScrapeRequest(BaseModel):
     burst_pause_minutes: Optional[list] = None  # [30, 90]
     max_per_company_per_day: Optional[int] = None
     dry_run: bool = False
+    apply_mode: str = "auto"                    # auto=正常发送；draft=只填不发
     experiences: Optional[list] = None          # 经验多选 ["1-3年","5-10年"]，与单值 experience 共存
     educations: Optional[list] = None           # 学历多选 ["本科","硕士"]
     skip_applied: bool = True                    # 跨任务去重：跳过 7 天内已真实投递的同一岗位
@@ -205,13 +209,11 @@ class ScrapeRequest(BaseModel):
 
 class EnrichRequest(BaseModel):
     items: list[dict] = []
-    llm_config: Optional[dict] = None
 
 
 class ScoreRequest(BaseModel):
     items: list[dict] = []
     prefs: str = ""
-    llm_config: Optional[dict] = None
 
 
 class LLMConfigRequest(BaseModel):
@@ -220,6 +222,10 @@ class LLMConfigRequest(BaseModel):
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     enabled: Optional[bool] = None
+
+
+class ResumeProfileRequest(BaseModel):
+    profile_text: str = ""
 
 
 @app.get("/")
@@ -259,6 +265,19 @@ async def preflight(req: ScrapeRequest):
     estimates = []
     total = 0
     warnings = []
+
+    try:
+        active_risks = await db.list_platform_risks()
+    except Exception:
+        active_risks = []
+    risk_map = {r.get("platform"): r for r in active_risks}
+    for plat in (req.platforms or []):
+        r = risk_map.get(plat)
+        if r:
+            warnings.append(
+                f"{plat} 处于风控冷却中（至 {r.get('blocked_until')}："
+                f"{r.get('reason') or r.get('state') or ''}）"
+            )
 
     for plat in (req.platforms or []):
         per_platform_cap = pl.get(plat) if isinstance(pl, dict) else None
@@ -308,6 +327,11 @@ async def preflight(req: ScrapeRequest):
     avg_sec = {"slow": 12.0, "normal": 6.0, "fast": 4.0, "turbo": 3.5}.get(rate, 6.0)
     eta_min = round(total * avg_sec / 60, 1)
 
+    if rate == "turbo" and req.auto_apply and "boss" in (req.platforms or []):
+        warnings.append("Boss + 极速 + 自动投递是高风险组合，建议 normal/slow")
+    if req.greeting_template and not req.llm_config:
+        warnings.append("固定招呼语模板会向多个 HR 发送相同文本，易被判为模板")
+
     return {
         "ok": True,
         "combos": combos,
@@ -316,6 +340,7 @@ async def preflight(req: ScrapeRequest):
         "eta_minutes": eta_min,
         "active_hours_now": in_window,
         "dry_run": bool(req.dry_run),
+        "risk": active_risks,
         "warnings": warnings,
     }
 
@@ -617,26 +642,28 @@ async def export_results(task_id: str, format: str = "json"):
 
     if format == "csv":
         import csv
+        import io
+        from core.output import _atomic_write
         filepath = out_dir / f"export_{task_id}_{datetime.now():%Y%m%d_%H%M%S}.csv"
         jobs = data.get("jobs", [])
-        if not jobs:
-            filepath.touch()
-            return FileResponse(filepath, filename=filepath.name)
 
         fieldnames = [
             "job_title", "company_name", "salary_range", "salary_min", "salary_max",
             "city", "experience_required", "education_required",
             "platform_name", "job_url", "publish_time",
         ]
-        with open(filepath, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-            writer.writeheader()
-            for j in jobs:
-                writer.writerow(j)
+        buf = io.StringIO()
+        writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for j in jobs:
+            writer.writerow(j)
+        _atomic_write(filepath, buf.getvalue(), encoding="utf-8-sig")
     else:
+        from core.output import _atomic_write
         filepath = out_dir / f"export_{task_id}_{datetime.now():%Y%m%d_%H%M%S}.json"
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        _atomic_write(filepath,
+                      json.dumps(data, ensure_ascii=False, indent=2),
+                      encoding="utf-8")
 
     return FileResponse(filepath, filename=filepath.name)
 
@@ -658,7 +685,23 @@ async def get_cities_endpoint():
 # ───────── 公开岗位平台聚合 ─────────
 
 _public_jobs_lock = asyncio.Lock()
+_public_jobs_busy = False
 _public_jobs_last: dict = {"at": None, "per_source": {}, "errors": []}
+
+
+@asynccontextmanager
+async def _public_jobs_guard():
+    """原子 busy 判断 + 加锁，避免两个请求同时通过 locked() 检查。"""
+    global _public_jobs_busy
+    if _public_jobs_busy:
+        yield False
+        return
+    _public_jobs_busy = True
+    try:
+        async with _public_jobs_lock:
+            yield True
+    finally:
+        _public_jobs_busy = False
 
 
 @app.get("/api/public_jobs/sources")
@@ -676,7 +719,7 @@ async def public_jobs_status():
         "per_source": _public_jobs_last.get("per_source") or {},
         "errors": _public_jobs_last.get("errors") or [],
         "industry": _public_jobs_last.get("industry") or "",
-        "running": _public_jobs_lock.locked(),
+        "running": _public_jobs_busy,
     }
 
 
@@ -686,7 +729,7 @@ async def refresh_public_jobs(
     industry: Optional[str] = Query(None, description="行业大类名，传给 WebSearch 用"),
     keyword: Optional[str] = Query(None, description="岗位关键词，传给所有支持的源"),
     sources: Optional[str] = Query(None, description="逗号分隔的 source key，缺省=全部"),
-    enrich: bool = Query(True, description="是否在抓取后跑 LLM 增强（false=纯抓不烧 token）"),
+    force: bool = Query(False, description="清空 HTTP 缓存后重抓（默认复用 TTL 缓存）"),
 ):
     """并发拉所有（或指定）公开岗位源，返回合并去重后的列表。
 
@@ -696,14 +739,15 @@ async def refresh_public_jobs(
       - industry 仅传给 WebSearch 当关键词用，其它源忽略。
       - 不落 DB —— 公开列表是"实时视图"，每次点击重抓。
     """
-    if _public_jobs_lock.locked():
-        return {"status": "busy", "message": "上一次抓取还在跑"}
-
-    async with _public_jobs_lock:
+    async with _public_jobs_guard() as ok:
+        if not ok:
+            return {"status": "busy", "message": "上一次抓取还在跑"}
         import time
         from sources import iter_sources
-        from sources._http import clear_cache
-        clear_cache()
+        from sources._http import clear_cache, drain_errors
+        drain_errors()  # 清掉上一轮的 HTTP 错误
+        if force:
+            clear_cache()
         all_sources = iter_sources()
         if sources:
             wanted = {s.strip() for s in sources.split(",") if s.strip()}
@@ -734,10 +778,13 @@ async def refresh_public_jobs(
                 kw_for_source = kw
             t0 = time.perf_counter()
             try:
-                items = await s.fetch(
-                    limit=limit_per_source, keyword=kw_for_source, city="",
+                items = await asyncio.wait_for(
+                    s.fetch(limit=limit_per_source, keyword=kw_for_source, city=""),
+                    timeout=60.0,
                 )
                 return s.key, items, None, time.perf_counter() - t0
+            except asyncio.TimeoutError:
+                return s.key, [], "TimeoutError: >60s", time.perf_counter() - t0
             except Exception as e:
                 return s.key, [], f"{type(e).__name__}: {e}", time.perf_counter() - t0
 
@@ -765,6 +812,7 @@ async def refresh_public_jobs(
         per_source_raw: dict[str, int] = {}
         timings: dict[str, float] = {}
         errors: list[dict] = list(early_errors)  # 预跳过的源先入列
+        errors.extend(drain_errors())
         for key, items, err, elapsed in results:
             if err:
                 errors.append({"source": key, "error": err})
@@ -787,24 +835,27 @@ async def refresh_public_jobs(
         # core/dedup.py 的 deduplicate_jobs 期望 JobInfo 对象 — 公开列表是 dict，
         # 这里走 10 行内联实现：(title.lower, company.lower) 作为聚合 key
         merged_list = list(merged.values())
-        seen_keys: set[tuple[str, str]] = set()
+        seen_keys: set[tuple[str, str, str]] = set()
         deduped: list[dict] = []
         for it in merged_list:
+            # 公司名归一化：去掉部门后缀（括号内）、空白
+            company = re.sub(r"[（(【\[].*?[）)】\]]", "",
+                             (it.get("company") or "").lower())
+            company = re.sub(r"\s+", "", company)
             k = (
                 (it.get("title") or "").strip().lower(),
-                (it.get("company") or "").strip().lower(),
+                company,
+                (it.get("location") or "").strip().lower(),
             )
             # 全空键不参与去重（避免把多个无 title/company 的条目误合并）
-            if k != ("", "") and k in seen_keys:
+            if k != ("", "", "") and k in seen_keys:
                 continue
-            if k != ("", ""):
+            if k != ("", "", ""):
                 seen_keys.add(k)
             deduped.append(it)
 
-        # enrich 开关 — 默认 True；False 时即便 LLM 已配置也不在 refresh 路径上跑增强
-        # （当前 refresh 不内联 LLM 增强，参数保留为前端的 kill switch）
-        _ = enrich
-
+        # 注：refresh 只做抓取/去重，不内联 LLM 增强；
+        # 富化与打分由 /api/public_jobs/llm_enrich、/llm_score 单独触发。
         all_items = sorted(
             deduped,
             key=lambda x: x.get("publish_time") or x.get("fetched_at") or "",
@@ -842,8 +893,7 @@ async def llm_enrich_public_jobs(body: EnrichRequest):
                       experience, publish_time}, ...]}
     返回: {"results": {id: {deadline?, location?, education?, experience?, salary?}, ...}}
     """
-    llm_config = body.llm_config or get_request_llm_config()
-    return await _enricher.enrich(body.items or [], llm_config)
+    return await _enricher.enrich(body.items or [])
 
 
 @app.post("/api/public_jobs/llm_score")
@@ -857,8 +907,7 @@ async def llm_score_public_jobs(body: ScoreRequest):
     if not prefs:
         return {"error": "需要先在「求职偏好」里写明你的期望"}
 
-    llm_config = body.llm_config or get_request_llm_config()
-    return await _scorer.score(body.items or [], prefs, llm_config)
+    return await _scorer.score(body.items or [], prefs)
 
 
 @app.get("/api/public_jobs/diag")
@@ -869,34 +918,52 @@ async def diag_public_jobs():
     """
     import time
     from sources import iter_sources
-    out = []
-    for s in iter_sources():
-        t0 = time.perf_counter()
-        try:
-            items = await s.fetch(limit=3, keyword="", city="")
-            sample = items[0] if items else None
-            out.append({
-                "key": s.key,
-                "name": s.display_name,
-                "category": s.category,
-                "count": len(items),
-                "elapsed": round(time.perf_counter() - t0, 2),
-                "ok": True,
-                "error": None,
-                "sample_title": (sample or {}).get("title", "")[:60] if sample else None,
-            })
-        except Exception as e:
-            out.append({
-                "key": s.key,
-                "name": s.display_name,
-                "category": s.category,
-                "count": 0,
-                "elapsed": round(time.perf_counter() - t0, 2),
-                "ok": False,
-                "error": f"{type(e).__name__}: {e}",
-                "sample_title": None,
-            })
-    return {"results": out, "at": datetime.now().isoformat(timespec="seconds")}
+    async with _public_jobs_guard() as ok:
+        if not ok:
+            return {"results": [], "error": "refresh running"}
+        out = []
+        for s in iter_sources():
+            t0 = time.perf_counter()
+            try:
+                items = await asyncio.wait_for(
+                    s.fetch(limit=3, keyword="", city=""), timeout=30.0)
+                sample = items[0] if items else None
+                out.append({
+                    "key": s.key,
+                    "name": s.display_name,
+                    "category": s.category,
+                    "count": len(items),
+                    "elapsed": round(time.perf_counter() - t0, 2),
+                    "ok": True,
+                    "error": None,
+                    "sample_title": (sample or {}).get("title", "")[:60] if sample else None,
+                })
+            except Exception as e:
+                out.append({
+                    "key": s.key,
+                    "name": s.display_name,
+                    "category": s.category,
+                    "count": 0,
+                    "elapsed": round(time.perf_counter() - t0, 2),
+                    "ok": False,
+                    "error": f"{type(e).__name__}: {e}",
+                    "sample_title": None,
+                })
+        return {"results": out, "at": datetime.now().isoformat(timespec="seconds")}
+
+@app.get("/api/risk")
+async def risk_status():
+    """当前仍生效的平台风控冷却。"""
+    return {"risks": await db.list_platform_risks()}
+
+
+@app.post("/api/risk/clear/{platform}")
+async def risk_clear(platform: str):
+    """人工完成验证后，手动解除某平台的风控冷却。"""
+    if platform not in MasterAgent.AGENT_MAP:
+        raise HTTPException(status_code=400, detail="unknown platform")
+    await db.clear_platform_risk(platform)
+    return {"ok": True, "platform": platform}
 
 
 @app.get("/api/config")
@@ -926,10 +993,10 @@ async def get_config():
 @app.post("/api/config")
 async def save_config(req: LLMConfigRequest, request: Request):
     """保存 LLM 配置到 .env 文件"""
-    # 鉴权：若设置了 JOBSPIDER_TOKEN，则要求请求头携带匹配的 X-Auth-Token
-    if JOBSPIDER_TOKEN:
-        if request.headers.get("X-Auth-Token") != JOBSPIDER_TOKEN:
-            raise HTTPException(status_code=401, detail="auth required")
+    # 鉴权：仅在用户显式在 .env 设置 JOBSPIDER_TOKEN 时要求 X-Auth-Token。
+    # 自动生成的临时 token 前端并不知道，若也强制校验会导致「保存到 .env」永远 401。
+    if _TOKEN_FROM_ENV and request.headers.get("X-Auth-Token") != JOBSPIDER_TOKEN:
+        raise HTTPException(status_code=401, detail="auth required")
     try:
         from config import ROOT_DIR
         _ENV_FILE = ROOT_DIR / ".env"
@@ -1005,6 +1072,127 @@ async def save_config(req: LLMConfigRequest, request: Request):
         # 不要把异常详情泄露给客户端（可能含文件路径、堆栈等）
         print(f"[/api/config] save failed: {type(e).__name__}: {e}", flush=True)
         return {"ok": False, "error": "config save failed"}
+
+
+# ───────── 简历（用于生成个性化招呼语） ─────────
+
+def _resume_response(data: dict) -> dict:
+    return {
+        "exists": True,
+        "filename": data.get("filename") or "",
+        "uploaded_at": data.get("uploaded_at"),
+        "updated_at": data.get("updated_at"),
+        "chars": int(data.get("chars") or 0),
+        "profile_text": data.get("profile_text") or "",
+        "profile_source": data.get("profile_source") or "",
+        "profile": data.get("profile") or {},
+    }
+
+
+@app.post("/api/resume")
+async def upload_resume(file: UploadFile = File(...)):
+    """上传简历 → 提取文本 → 打码 → LLM 解析摘要 → 本地保存。"""
+    from core.resume_parser import (MAX_UPLOAD_BYTES, ResumeParseError,
+                                    extract_text, mask_contacts,
+                                    normalize_text)
+    from core.resume_store import build_profile_text, save_resume
+    from core.llm_extractor import LLMExtractor
+
+    filename = file.filename or "resume"
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件超过 {MAX_UPLOAD_BYTES // (1024 * 1024)}MB 限制")
+    try:
+        text = await asyncio.to_thread(extract_text, filename, data)
+    except ResumeParseError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=400, detail=f"简历解析失败：{type(e).__name__}")
+
+    text = normalize_text(mask_contacts(text))
+    profile: dict = {}
+    try:
+        profile = await asyncio.wait_for(
+            LLMExtractor().parse_resume(text), timeout=30.0)
+    except Exception:
+        profile = {}
+    if not isinstance(profile, dict):
+        profile = {}
+
+    profile_text = build_profile_text(profile, text)
+    source = "llm" if profile else "fallback"
+    saved = save_resume(filename, text, profile, profile_text, source)
+    resp = _resume_response(saved)
+    resp["ok"] = True
+    if not profile:
+        resp["warning"] = ("LLM 未配置或解析失败，当前使用简历原文摘录；"
+                           "配置 LLM 后可点「重新解析」")
+    return resp
+
+
+@app.get("/api/resume")
+async def get_resume():
+    from core.resume_store import load_resume
+    data = load_resume()
+    if not data:
+        return JSONResponse({"exists": False},
+                            headers={"Cache-Control": "no-store"})
+    return JSONResponse(_resume_response(data),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/resume/profile")
+async def update_resume_profile(body: ResumeProfileRequest):
+    """保存人工编辑后的简历摘要。"""
+    from core.resume_store import update_profile_text
+    try:
+        saved = update_profile_text(body.profile_text)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="还没有上传简历")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    resp = _resume_response(saved)
+    resp["ok"] = True
+    return resp
+
+
+@app.post("/api/resume/reparse")
+async def reparse_resume():
+    """用已保存的打码原文重新跑 LLM 解析。"""
+    from core.resume_store import build_profile_text, load_resume, save_resume
+    from core.llm_extractor import LLMExtractor
+
+    data = load_resume()
+    if not data:
+        raise HTTPException(status_code=404, detail="还没有上传简历")
+    raw = data.get("raw_text") or ""
+    if not raw:
+        raise HTTPException(status_code=400, detail="简历原文为空，请重新上传")
+
+    try:
+        profile = await asyncio.wait_for(
+            LLMExtractor().parse_resume(raw), timeout=30.0)
+    except Exception:
+        profile = {}
+    if not isinstance(profile, dict) or not profile:
+        return {"ok": False,
+                "warning": "LLM 未配置或解析失败，请先保存 LLM 配置后重试"}
+
+    profile_text = build_profile_text(profile, raw)
+    saved = save_resume(data.get("filename") or "resume", raw, profile,
+                        profile_text, "llm")
+    resp = _resume_response(saved)
+    resp["ok"] = True
+    return resp
+
+
+@app.delete("/api/resume")
+async def remove_resume():
+    from core.resume_store import delete_resume
+    return {"ok": True, "deleted": delete_resume()}
 
 
 _DEFAULT_WS_ORIGINS = {"http://127.0.0.1:8765", "http://localhost:8765"}
@@ -1177,51 +1365,26 @@ async def _run_scrape(task_id: str, req: ScrapeRequest):
     merged_results: list[dict] = []
 
     try:
-        # 注入 LLM 配置到当前请求的 ContextVar（避免污染全局 os.environ，防止并发请求互相覆盖）
+        # 仅打印本次请求携带的配置，便于排查；真正生效的是 /api/config 写入 .env 的配置
         if req.llm_config:
             llm_cfg = req.llm_config
-            _request_llm_config.set(llm_cfg)
             print(f"  [LLM 配置] provider={llm_cfg.get('provider', 'deepseek')} "
                   f"model={llm_cfg.get('model', 'deepseek-chat')} "
                   f"base_url={llm_cfg.get('base_url', '')} "
                   f"has_key={bool(llm_cfg.get('api_key'))}",
                   flush=True)
 
-        total_combos = len(kw_list) * len(city_list)
-        combo_idx = 0
-        # 跨组合的累计投递计数（确保 platform_limits 是任务级而非单组合级）
-        applied_so_far: dict[str, int] = {p: 0 for p in req.platforms}
-        # 跨重启日上限：从 DB 读取 24h 内已投，作为 applied_so_far 的初值
-        try:
-            from core import db as _db
-            for p in req.platforms:
-                seed = await _db.count_applied_in_window(p, 24)
-                if seed > 0:
-                    applied_so_far[p] = seed
-                    print(f"  [Task {task_id}] DB 历史: {p} 24h 已投 {seed}", flush=True)
-        except Exception as _e:
-            print(f"  [Task {task_id}] DB priming 失败: {_e}", flush=True)
-        original_limits: dict[str, int] = dict(req.platform_limits or {})
-
+        params_list: list[SearchParams] = []
+        active_hours = (tuple(req.active_hours)
+                        if req.active_hours and len(req.active_hours) == 2
+                        else None)
+        burst_minutes = (tuple(req.burst_pause_minutes)
+                         if req.burst_pause_minutes
+                         and len(req.burst_pause_minutes) == 2
+                         else (30, 90))
         for city in city_list:
             for kw in kw_list:
-                combo_idx += 1
-                # 用户停止检查
-                if entry.get("stop_requested"):
-                    print(f"  [Task {task_id}] 检测到停止请求，提前结束", flush=True)
-                    break
-                # 计算本组合的剩余配额：original_limit - applied_so_far
-                # 若某平台累计已达上限，则给该平台传 0（base.py 会全部跳过）
-                current_limits: dict[str, int] = {}
-                for p, lim in original_limits.items():
-                    if lim is None:
-                        continue
-                    remaining = max(0, int(lim) - applied_so_far.get(p, 0))
-                    current_limits[p] = remaining
-                print(f"\n  [Task {task_id}] 组合 {combo_idx}/{total_combos}: "
-                      f"city={city or '全国'} | kw={kw} | "
-                      f"剩余配额={current_limits or '不限'}", flush=True)
-                params = SearchParams(
+                params_list.append(SearchParams(
                     keyword=kw,
                     city=city,
                     salary_min=req.salary_min,
@@ -1235,61 +1398,36 @@ async def _run_scrape(task_id: str, req: ScrapeRequest):
                     auto_apply=req.auto_apply,
                     greeting_template=req.greeting_template,
                     exclude_rules=req.exclude_rules,
-                    platform_limits=current_limits,
+                    # 任务级上限：每个组合传入同一个完整上限，由 lane 内累计计数控制。
+                    platform_limits=dict(req.platform_limits or {}),
                     apply_rate=req.apply_rate or "normal",
-                    # 防封号参数（SearchParams 已包含这些字段）
                     global_limit=req.global_limit,
-                    daily_limit_per_platform=req.daily_limit_per_platform or {},
-                    active_hours=(tuple(req.active_hours)
-                                  if req.active_hours and len(req.active_hours) == 2
-                                  else None),
+                    daily_limit_per_platform=dict(
+                        req.daily_limit_per_platform or {}),
+                    active_hours=active_hours,
                     burst_pause_after=req.burst_pause_after,
-                    burst_pause_minutes=(tuple(req.burst_pause_minutes)
-                                         if req.burst_pause_minutes
-                                         and len(req.burst_pause_minutes) == 2
-                                         else (30, 90)),
+                    burst_pause_minutes=burst_minutes,
                     max_per_company_per_day=req.max_per_company_per_day,
                     dry_run=req.dry_run,
-                )
-                agent = MasterAgent(params, progress_callback=on_progress,
-                                    job_callback=on_job, log_callback=on_log)
-                # Inject stop-check + global-limit hooks (no-op if MasterAgent
-                # doesn't support these setters yet — concurrently being added).
-                _stop_fn = lambda: bool(entry.get("stop_requested"))
-                _global_lim = req.global_limit
-                _global_count_fn = lambda: sum(applied_so_far.values())
-                _set_stop = getattr(agent, "set_stop_check", None)
-                if callable(_set_stop):
-                    try:
-                        _set_stop(_stop_fn)
-                    except Exception:
-                        pass
-                _set_glob = getattr(agent, "set_global_limit", None)
-                if callable(_set_glob):
-                    try:
-                        _set_glob(_global_lim, _global_count_fn)
-                    except Exception:
-                        pass
-                result = await agent.run()
-                merged_jobs.extend(result["jobs"])
-                merged_results.extend(result["results"])
+                    apply_mode=getattr(req, "apply_mode", "auto") or "auto",
+                ))
+        print(f"\n  [Task {task_id}] {len(params_list)} 个 kw×city 组合，"
+              f"平台={req.platforms}", flush=True)
 
-                # 累加本组合实际投递数，供下一组合扣减
-                for j in result["jobs"]:
-                    if j.get("apply_status") == "applied":
-                        p = j.get("platform")
-                        if p:
-                            applied_so_far[p] = applied_so_far.get(p, 0) + 1
-
-                _remember_results(task_id, {
-                    "jobs": merged_jobs,
-                    "results": merged_results,
-                    "total": len(merged_jobs),
-                    "json_path": result.get("json_path", ""),
-                    "csv_path": result.get("csv_path", ""),
-                })
-            if entry.get("stop_requested"):
-                break
+        agent = MasterAgent(params_list, progress_callback=on_progress,
+                            job_callback=on_job, log_callback=on_log)
+        agent.set_stop_check(lambda: bool(entry.get("stop_requested")))
+        agent.set_global_limit(req.global_limit)
+        result = await agent.run()
+        merged_jobs.extend(result["jobs"])
+        merged_results.extend(result["results"])
+        _remember_results(task_id, {
+            "jobs": merged_jobs,
+            "results": merged_results,
+            "total": len(merged_jobs),
+            "json_path": result.get("json_path", ""),
+            "csv_path": result.get("csv_path", ""),
+        })
 
         if entry.get("stop_requested"):
             entry["status"] = "stopped"
@@ -1299,10 +1437,12 @@ async def _run_scrape(task_id: str, req: ScrapeRequest):
             await db.update_task(task_id, status="done")
 
         applied_count = sum(1 for j in merged_jobs if j.get("apply_status") == "applied")
+        uncertain_count = sum(1 for j in merged_jobs if j.get("apply_status") == "uncertain")
         skipped_count = sum(1 for j in merged_jobs if j.get("apply_status") == "skipped")
         failed_count = sum(1 for j in merged_jobs if j.get("apply_status") == "failed")
         print(f"\n  [Task {task_id}] 最终汇总: 总计 {len(merged_jobs)} 条, "
-              f"已投递 {applied_count}, 跳过 {skipped_count}, 失败 {failed_count}",
+              f"已投递 {applied_count}, 待确认 {uncertain_count}, "
+              f"跳过 {skipped_count}, 失败 {failed_count}",
               flush=True)
 
     except asyncio.CancelledError:
@@ -1320,6 +1460,10 @@ async def _run_scrape(task_id: str, req: ScrapeRequest):
         print(f"\n  [ERROR] Task {task_id} failed: {e}", flush=True)
         traceback.print_exc()
         await db.update_task(task_id, status="failed", error=str(e))
+
+    # 等所有 job 的 DB 写入/WS 广播任务落完，再刷新统计
+    while _bg_tasks:
+        await asyncio.gather(*list(_bg_tasks), return_exceptions=True)
 
     entry["finished_at"] = datetime.now().isoformat()
     await db.update_task(task_id, finished=True)
@@ -1339,11 +1483,6 @@ async def _run_scrape(task_id: str, req: ScrapeRequest):
 
 # 启动时创建必要目录
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def get_request_llm_config() -> Optional[dict]:
-    """Per-request LLM override; returns None outside an /api/scrape task."""
-    return _request_llm_config.get()
 
 
 if __name__ == "__main__":

@@ -39,8 +39,9 @@ class ScraplingEngine:
     ):
         """打开新标签页并导航到 URL，返回 Playwright Page（保持存活）
 
-        重试时关闭上一轮失败的 page，防止 Chrome 标签页泄漏。
-        成功返回的 page 由调用方持有/关闭。
+        不再等待 networkidle：聊天/轮询/广告页面可能永远不进入 idle，
+        最坏会白等 60s。改为 DOMContentLoaded + load（短超时）+ 目标选择器。
+        `network_idle` 参数保留仅为兼容旧调用，不再生效。
         """
         last_err = None
         page = None
@@ -57,10 +58,7 @@ class ScraplingEngine:
                 page = await engine.new_page()
                 await page.goto(url, wait_until="domcontentloaded")
                 try:
-                    await page.wait_for_load_state(
-                        "networkidle" if network_idle else "load",
-                        timeout=PAGE_LOAD_TIMEOUT,
-                    )
+                    await page.wait_for_load_state("load", timeout=15000)
                 except Exception:
                     pass
                 if wait_selector:
@@ -72,7 +70,7 @@ class ScraplingEngine:
                         log.error("wait_selector miss",
                                   url=url, selector=wait_selector,
                                   error=type(e).__name__, detail=str(e))
-                await asyncio.sleep(gaussian_delay(0.5, 1.5))
+                await asyncio.sleep(gaussian_delay(0.3, 0.8))
                 return page  # 成功 — 调用方持有
 
             except Exception as e:
@@ -188,9 +186,13 @@ class ScraplingEngine:
     # ───────── 滚动 ─────────
 
     async def scroll_page(self, page, times: int = 3):
+        """真实滚轮滚动（不是 JS scrollBy），随机距离/停顿，最后回顶。"""
         for _ in range(times):
-            await self.eval_js(page, "window.scrollBy(0, window.innerHeight)")
-            await asyncio.sleep(gaussian_delay(0.3, 0.8))
+            try:
+                await page.mouse.wheel(0, random.randint(280, 900))
+            except Exception:
+                await self.eval_js(page, "window.scrollBy(0, window.innerHeight)")
+            await asyncio.sleep(gaussian_delay(0.4, 1.2))
         await self.eval_js(page, "window.scrollTo(0, 0)")
 
     # ───────── 调试工具 ─────────

@@ -10,7 +10,7 @@ import asyncio
 import hashlib
 import re
 
-from models.job import SearchParams, JobInfo
+from models.job import SearchParams, JobInfo, ApplyOutcome
 from agents.base import BaseAgent
 from config import gaussian_delay
 
@@ -51,44 +51,18 @@ class Job51Agent(BaseAgent):
         }"""))
 
     async def _check_anti_bot(self, page) -> bool:
-        try:
-            url = await self.engine.current_url(page)
-            if any(k in (url or "").lower() for k in ("captcha", "verify", "wapsec")):
-                self.log(f"  [前程无忧] 🚨 anti-bot URL detected: {url[:80]}")
-                return True
-            hit = await self.eval_js(page, """() => {
-                const sel = [
-                    '.swiper-wrapper.captcha', '.verify-slider',
-                    '.yidun_modal', '.yidun-popup', '.verify-wrap',
-                    '.captcha-box', '[class*="captcha"]',
-                    '.login-dialog.show', '.qs-dialog-login.show',
-                ];
-                for (const s of sel) {
-                    const el = document.querySelector(s);
-                    if (el && el.offsetParent !== null
-                        && el.offsetWidth > 50 && el.offsetHeight > 50) {
-                        return el.className || s;
-                    }
-                }
-                const t = document.title || '';
-                if (t.includes('验证') || t.includes('拦截')) return 'title:' + t.slice(0, 30);
-                const body = (document.body?.innerText || '').slice(0, 4000);
-                if (/请完成.{0,4}验证|滑动.{0,4}验证|安全验证|系统检测到|访问过于频繁|访问太频繁/.test(body))
-                    return 'text_match';
-                return '';
-            }""")
-            if hit:
-                self.log(f"  [前程无忧] 🚨 anti-bot DOM: {hit}")
-                return True
-        except Exception as e:
-            print(f"  [51job anti-bot check] {e}", flush=True)
-        return False
+        return await super()._check_anti_bot(page)
 
-    async def apply_to_job(self, page, job, greeting, params) -> bool:
-        """前程无忧: 点击对应职位卡片的"申请/投递"按钮
+    async def apply_to_job(self, page, job, greeting, params) -> ApplyOutcome:
+        """前程无忧: 点击对应职位卡片的"申请/投递"按钮。
 
-        51job 点击"投递"后弹出结果弹窗，需关闭。按钮变为"已申请"即成功。
+        51job 无 web 聊天框，招呼语物理上不可注入；这里只判定投递回执。
         """
+        draft = (getattr(params, "apply_mode", "auto") or "auto").lower() == "draft"
+        if draft:
+            self._apply_detail = "草稿未发送"
+            return ApplyOutcome.UNCERTAIN
+
         find_js = self.build_card_button_finder(
             job,
             card_selectors=(
@@ -112,15 +86,27 @@ class Job51Agent(BaseAgent):
         result = await self.human_click(page, find_js)
         if not result.get("clicked"):
             reason = result.get("reason", "unknown")
+            if reason == "already":
+                return ApplyOutcome.ALREADY
+            self._apply_detail = f"[环境] 未找到投递按钮({reason})"
             print(f"  [前程无忧] apply 失败: {reason}", flush=True)
-            return False
+            return ApplyOutcome.FAILED
 
         print(f"  [前程无忧] 鼠标点击了按钮: '{result.get('text', '')}'", flush=True)
-        await asyncio.sleep(gaussian_delay(2.0, 3.0))
 
-        # 检测投递后的弹窗并关闭
+        popup_sel = (
+            '.el-dialog, .el-message-box, .ant-modal, .dialog, .modal, '
+            '[class*="dialog"], [class*="popup"]'
+        )
+        try:
+            await page.wait_for_selector(popup_sel, timeout=3000, state="visible")
+        except Exception:
+            pass
+
+        if await self._check_anti_bot(page):
+            return ApplyOutcome.BLOCKED
+
         popup_info = await self.eval_js(page, """() => {
-            // 检测所有可能的弹窗/对话框
             const sels = [
                 '.el-dialog', '.el-message-box', '.ant-modal',
                 '.dialog', '.modal', '.popup',
@@ -129,11 +115,11 @@ class Job51Agent(BaseAgent):
                 '[class*="popup"]:not([style*="display: none"])',
             ];
             for (const sel of sels) {
-                const els = document.querySelectorAll(sel);
-                for (const el of els) {
-                    if (el.offsetParent === null && window.getComputedStyle(el).display === 'none') continue;
-                    const text = el.textContent?.trim().slice(0, 100) || '';
-                    // 找关闭按钮（先在弹窗内找，再在文档级找）
+                for (const el of document.querySelectorAll(sel)) {
+                    if (el.offsetParent === null
+                        && window.getComputedStyle(el).display === 'none') continue;
+                    const text = (el.textContent || '').trim().slice(0, 200);
+                    if (!text) continue;
                     let closeBtn = el.querySelector(
                         '.el-dialog__close, .el-message-box__close, .ant-modal-close, '
                         + '.close, .close-btn, [class*="close"], '
@@ -141,58 +127,47 @@ class Job51Agent(BaseAgent):
                         + '.icon-close, .btn-close'
                     );
                     if (!closeBtn) {
-                        // X 可能在弹窗外层（遮罩层直接子元素）
                         closeBtn = el.parentElement?.querySelector(
                             '[class*="close"], .icon-close, .btn-close'
                         );
                     }
-                    if (!closeBtn) {
-                        // 文档级：找投递成功弹窗附近的关闭按钮
-                        closeBtn = document.querySelector(
-                            '.el-dialog__close, .ant-modal-close, '
-                            + '.zppp-close, [class*="dialog"] [class*="close"], '
-                            + '[class*="modal"] [class*="close"], '
-                            + '[class*="popup"] [class*="close"]'
-                        );
-                    }
                     if (closeBtn) closeBtn.click();
-                    const isSuccess = text.includes('成功') || text.includes('已投递')
-                        || text.includes('已申请') || text.includes('投递成功');
-                    const isError = text.includes('失败') || text.includes('登录')
-                        || text.includes('频繁') || text.includes('异常');
-                    return { found: true, text: text.slice(0, 60), success: isSuccess, error: isError, closed: !!closeBtn };
+                    return {found: true, text: text};
                 }
             }
-            return { found: false };
+            // 无弹窗：检查卡片按钮是否已变成“已申请/已投递”
+            const t = document.body ? document.body.innerText : '';
+            if (/已申请|已投递/.test(t)) return {found: true, text: '已申请'};
+            return {found: false};
         }""")
+        text = (popup_info or {}).get("text", "") or ""
 
-        if popup_info and popup_info.get("found"):
-            print(f"  [前程无忧] 弹窗: '{popup_info.get('text', '')}' "
-                  f"(closed={popup_info.get('closed')})", flush=True)
-            await asyncio.sleep(gaussian_delay(0.3, 0.5))
-            if popup_info.get("error"):
-                return False
-            return True
+        if text:
+            print(f"  [前程无忧] 投递回执: '{text[:60]}'", flush=True)
+            if any(k in text for k in ("成功", "已投递", "已申请")):
+                return ApplyOutcome.SUCCESS
+            if any(k in text for k in ("已下线", "停止招聘", "职位不存在")):
+                self._apply_detail = f"[下架] {text[:40]}"
+                return ApplyOutcome.FAILED
+            if "登录" in text:
+                self._apply_detail = "[登录] 需要登录"
+                return ApplyOutcome.FAILED
+            if any(k in text for k in ("频繁", "异常", "验证")):
+                self._apply_detail = f"[风控] {text[:40]}"
+                return ApplyOutcome.FAILED
+            if any(k in text for k in ("简历", "完善", "失败")):
+                self._apply_detail = f"[状态] {text[:40]}"
+                return ApplyOutcome.FAILED
+            self._apply_detail = f"未识别回执: {text[:40]}"
+            return ApplyOutcome.UNCERTAIN
 
-        # 无弹窗 — 某些岗位可能直接提交无反馈
-        # 检查是否有登录弹窗等错误
-        has_error = await self.eval_js(page, """() => {
-            const loginDlg = document.querySelector(
-                '.login-dialog, [class*="login-modal"], [class*="login-pop"]'
-            );
-            if (loginDlg && loginDlg.offsetParent !== null) return 'login';
-            return '';
-        }""")
-        if has_error:
-            print(f"  [前程无忧] 投递后检测到异常: {has_error}", flush=True)
-            return False
-
-        print(f"  [前程无忧] 直接投递（无弹窗反馈）", flush=True)
-        return True
+        # 无弹窗、也无“已申请”回执
+        print(f"  [前程无忧] 直接投递（无明确回执）", flush=True)
+        self._apply_detail = "点击后无弹窗/无回执"
+        return ApplyOutcome.UNCERTAIN
 
     async def extract_list_page(self, page, params: SearchParams) -> list[JobInfo]:
         try:
-            await asyncio.sleep(1.5)
             jobs_data = await self.eval_js(page, """() => {
                 // 新版 we.51job.com 搜索结果
                 let items = document.querySelectorAll(

@@ -85,7 +85,6 @@ class PublicJobsEnricher:
     async def enrich(
         self,
         items: list[dict],
-        llm_config: Optional[dict] = None,
     ) -> dict[str, Any]:
         """跑 LLM 增强。
 
@@ -93,8 +92,6 @@ class PublicJobsEnricher:
           {"results": {id: {字段}}, "cached": n, "fresh": m}
           或 {"error": "..."} 当 LLM 不可用 / 入参为空
         """
-        # llm_config 当前未使用（保留参数是为了将来按调用方覆盖默认 client）
-        _ = llm_config
         if not is_llm_available():
             return {"error": "未配置 LLM API Key — 请到「配置」面板设置或 .env 中填写"}
 
@@ -169,7 +166,6 @@ class PublicJobsScorer:
         self,
         items: list[dict],
         prefs: str,
-        llm_config: Optional[dict] = None,
     ) -> dict[str, Any]:
         """跑 LLM 打分。
 
@@ -177,7 +173,6 @@ class PublicJobsScorer:
           {"results": {id: {score, reason}}, "cached": n, "fresh": m, "prefs_hash": h}
           或 {"error": "..."} 当 LLM 不可用 / prefs 为空 / 入参为空
         """
-        _ = llm_config
         if not is_llm_available():
             return {"error": "未配置 LLM API Key — 请到「配置」面板设置或 .env 中填写"}
 

@@ -60,8 +60,8 @@
 
 **📢 公开来源（无需登录）**
 - 国资委 / 人社部 — 央企政策与公告
-- 企业官网 — 华为/字节等社招直链
-- 招聘鸭 / 实习僧 — 应届/实习专项
+- 企业官网 — 华为/腾讯/网易社招直链
+- 国聘 / 实习僧 — 应届/实习专项
 - 地方人才网 + 全网搜索 + 拓展频道
 
 </td>
@@ -72,7 +72,7 @@
 
 - **岗位匹配打分** — 输入你的求职偏好（自然语言即可），AI 给每个岗位打 0-100 分并附理由
 - **公司质量评估** — 基于 JD 文本判断公司规模/业务方向/是否值得投
-- **个性化招呼语** — 根据 JD 自动生成针对性开场白（Boss / 智联 / 猎聘 支持注入；51job 平台无 web 聊天通道，仅一键投递）
+- **个性化招呼语** — 结合岗位 JD 和你在 🤖 LLM 页上传的简历摘要，自动生成针对性开场白（Boss / 智联 / 猎聘 支持注入；51job 平台无 web 聊天通道，仅一键投递）
 - **选择器自愈** — 当平台改版导致选择器失效时，LLM 自动分析 DOM 重新生成 CSS 选择器
 - **薪资智能解析** — 处理 "15-25K·14薪"、"15000-25000元/月" 等异构格式
 
@@ -82,14 +82,18 @@
 - WebSocket 推送：抓到一条岗位立即出现在页面上，无需等待全部完成
 - 多关键词 × 多城市矩阵抓取（如「Python + 后端」× 「北京 + 上海 + 深圳」）
 - 可视化进度面板：4 平台并行状态、当前页码、已投递数实时显示
-- 一键导出 JSON / CSV，支持按薪资/学历/经验二次筛选
+- 任务结束自动落盘 JSON / CSV 到 `output/`；也可通过 `/api/export?task_id=...&format=csv` 导出指定任务
 
 ### 🛡️ 反检测 + 稳健性
 
 - **持久化浏览器配置** — 一次扫码登录，下次自动恢复（基于 Playwright `launch_persistent_context`）
-- **高斯抖动延迟** — 模拟真人操作间隔，规避频率检测
-- **Stealth 注入** — 隐藏 `navigator.webdriver`、伪造 plugins、屏蔽第三方跟踪域名
-- **指数退避冷却** — 触发反爬时自动 10s→20s→40s→60s 退让
+- **引擎可选** — 默认 `rebrowser-playwright`（修补 CDP `Runtime.enable` 泄露），启动失败自动回退官方 `playwright`；`JOBSPIDER_ENGINE=playwright` 可强制回退
+- **真实指纹** — 复用本机 Chrome、真实 UA/plugins/mimeTypes；不再伪造 `navigator.plugins`/`languages`；`no_viewport` 用真实窗口尺寸
+- **高斯抖动延迟** — 按操作区间推导分布，短动作也有抖动
+- **风险熔断** — URL / DOM / 网络响应 / 登录态四层识别验证码、登录墙、限流、账号异常；冷却写入 SQLite，跨任务生效，可通过 API 手动解除
+- **三态投递** — `applied`（有回执）/ `uncertain`（点了但没回执，不重投）/ `skipped` / `failed`；失败分诊前缀 `[风控]/[登录]/[下架]/[状态]/[环境]`
+- **平台 lane** — 每个平台独立消费 keyword×city 组合，平台之间不再互相等组合屏障
+- **请求预算** — 单平台 500 次搜索请求上限，80% 告警，防止失控翻页
 - **断线自愈** — WebSocket 自动重连、任务级 LLM 限流（Semaphore 全局 3 并发）
 
 ---
@@ -106,7 +110,8 @@ cd JobSpider
 # 安装依赖
 pip install -r requirements.txt
 
-# 安装 Playwright Chromium（首次必须）
+# 默认使用本机已安装的 Google Chrome（channel="chrome"），无需额外下载浏览器。
+# 可选：如果你想用 Playwright 内置 Chromium 而不是本机 Chrome，再执行
 playwright install chromium
 ```
 
@@ -134,8 +139,18 @@ LLM_ENABLED=true
 
 ```bash
 python server.py
-# 或者 Windows 双击 run.bat
+# 或者 Windows 双击 run.bat（run.bat noopen = 只启动、不自动打开浏览器）
+# run.bat 启动后会优先用本机 Chrome 打开控制台；找不到 Chrome 才用系统默认浏览器
 ```
+
+Windows 也可以先双击 **`部署.bat`** 做一次环境部署：
+
+- 检查 Python 3.9+、pip、`requirements.txt` 依赖、Playwright 引擎、Google Chrome；
+- 已有的组件跳过；缺 Python/Chrome 时可用 winget 安装（会先确认）；
+- 缺少 `.env` 时从 `.env.template` 复制，已有 `.env` 不覆盖；
+- 部署完成后可选择立即启动；`部署.bat nostart` 只检查不启动。
+
+> JobSpider 目前固定使用**本机安装的 Google Chrome**（Playwright `channel="chrome"`）；Playwright 自带 Chromium 和 Edge 不会替代它。
 
 打开浏览器访问：**http://127.0.0.1:8765**
 
@@ -147,8 +162,9 @@ python server.py
    3年Python后端经验，想找北京/上海25k以上的岗位，
    偏好中大厂，不接受外包，对AI基建方向加分
    ```
-3. **设置抓取参数** — 选关键词、城市、平台、是否自动投递
-4. **点击「开始抓取」** — 实时看到岗位刷出来，LLM 打分排序，自动过滤低匹配
+3. **上传简历（可选）** — 在 🤖 LLM 页上传 PDF/DOCX/TXT 简历，LLM 会解析成摘要；自动投递时招呼语会结合 JD + 简历生成
+4. **设置抓取参数** — 选关键词、城市、平台、是否自动投递
+5. **点击「开始抓取」** — 实时看到岗位刷出来，LLM 打分排序，自动过滤低匹配
 
 ---
 
@@ -176,9 +192,16 @@ python server.py
 | `HEADLESS` | `false` | 浏览器是否无头模式（投递场景建议 false） |
 | `JOBSPIDER_HOST` | `127.0.0.1` | 服务监听地址，外网访问改 `0.0.0.0` |
 | `JOBSPIDER_PORT` | `8765` | 服务端口 |
-| `JOBSPIDER_TOKEN` | 自动生成 | API 鉴权 token，写入 `.env` |
+| `JOBSPIDER_PYTHON` | 自动探测 | 仅 `run.bat` 使用：指定 `python.exe` 路径；不设时依次用 `.venv` / 本机 3.9 / PATH |
+| `JOBSPIDER_TOKEN` | 自动生成 | `/api/config` 鉴权 token。仅在 `.env` 显式设置时强制校验 `X-Auth-Token`；不设置则自动生成临时 token，前端可直接保存配置 |
 | `JOBSPIDER_RATE_LIMIT` | `120` | 每 IP 每 60 秒请求上限 |
 | `JOBSPIDER_WECHAT_FEEDS` | `""` | 微信公众号 RSS 源（`url1\|名称1,url2\|名称2`） |
+| `JOBSPIDER_ENGINE` | `rebrowser` | 浏览器引擎：`rebrowser` / `playwright`（失败自动回退） |
+| `JOBSPIDER_JD_FETCH` | `auto` | `auto`=有 LLM 才抓 JD；`always`；`never`=不额外开详情页 |
+| `JOBSPIDER_APPLY_CONCURRENCY` | `2` | 跨平台同时执行投递动作的上限 |
+| `JOBSPIDER_COMBO_PAUSE` | `0` | 每个 kw×city 组合之间的休息秒数（0=关闭） |
+| `JOBSPIDER_BOSS_API` | `auto` | Boss 搜索 XHR 旁听：`auto` / `off` |
+| `JOBSPIDER_LLM_DEDUP` | `false` | LLM 辅助去重（默认关闭，规则去重已足够） |
 
 ### 平台特性对照
 
@@ -202,7 +225,7 @@ JobSpider/
 ├── agents/                    # 🤖 商业平台智能体（浏览器交互）
 │   ├── base.py                # 模板方法基类 + LLM 选择器降级
 │   ├── boss.py / zhilian.py / job51.py / liepin.py
-│   ├── master.py              # 多平台并行编排
+│   ├── master.py              # 平台 lane 工作队列（每平台独立消费组合）
 │   ├── _apply.py              # 自动投递逻辑
 │   ├── _filters.py            # 筛选 + 薪资解析
 │   └── _interactions.py       # 浏览器交互通用方法
@@ -216,11 +239,16 @@ JobSpider/
 │   └── _http.py / _browser.py # 底层网络层
 │
 ├── core/                      # 🧠 核心服务
-│   ├── browser_engine.py      # Playwright 单例 + Stealth
+│   ├── browser_engine.py      # 浏览器单例 + 响应信号记录
+│   ├── pw_compat.py           # rebrowser/playwright 引擎切换与回退
+│   ├── risk_guard.py          # 四层风控识别 + 平台级冷却熔断
+│   ├── applied_registry.py    # 任务级已投/待确认/同公司计数缓存
 │   ├── scrapling_engine.py    # 页面交互封装
 │   ├── llm_extractor.py       # LLM 提取/打分/招呼语
 │   ├── public_jobs_service.py # 公开岗位聚合 + Enrich/Score
-│   ├── db.py                  # SQLite WAL 持久化
+│   ├── resume_parser.py       # 简历文本提取 / 联系方式打码
+│   ├── resume_store.py        # 简历摘要本地存储
+│   ├── db.py                  # SQLite WAL 持久化 + applied_at 幂等
 │   ├── dedup.py               # 跨平台去重（O(n) 分桶 + 模糊匹配）
 │   ├── city.py                # 城市名归一化
 │   └── output.py              # JSON/CSV 导出
@@ -302,6 +330,17 @@ JobSpider/
 }
 ```
 
+### 简历上传与个性化招呼语
+
+在 **🤖 LLM** 页配置好 LLM 后，可以在同一页上传简历：
+
+- 支持 **文本型 PDF / DOCX / TXT / MD**；扫描版 PDF 不做 OCR，请另存为文本型 PDF 或 DOCX。
+- 上传后服务端提取文本，手机号/邮箱/身份证号自动打码，再交给 LLM 解析成“工作年限 / 技能 / 亮点 / 教育 / 求职方向”摘要。
+- 摘要会显示在文本框里，可以手动修改后点“保存摘要”；LLM 未配置时先保存原文摘录，配置后可点“重新解析”。
+- 自动投递时，LLM 会把**岗位 JD + 简历摘要**一起放进 prompt，只使用简历中真实存在的信息，不编造公司/项目/年限。
+- 简历只保存在本机 `data/resume.json`，不保存原始文件；解析和生成招呼语时会发送给当前配置的 LLM。
+- 删除简历后，招呼语恢复为不包含简历信息的行为。
+
 ### 排除规则（黑名单）
 
 ```
@@ -324,7 +363,6 @@ JobSpider/
 ```bash
 # 启动抓取
 curl -X POST http://127.0.0.1:8765/api/scrape \
-  -H "X-Token: $JOBSPIDER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"keyword":"Python","city":"北京","platforms":["boss","zhilian"]}'
 

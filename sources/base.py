@@ -92,7 +92,27 @@ class BaseSource:
         if not location:
             return False
         needle = city.replace("市", "").strip()
-        return needle in location
+        if not needle:
+            return True
+        # 城市边界匹配：避免「北京」命中「北京路」、「吉林」命中「吉林大学」
+        start = 0
+        while True:
+            idx = location.find(needle, start)
+            if idx < 0:
+                return False
+            before = location[idx - 1] if idx > 0 else ""
+            after = location[idx + len(needle):idx + len(needle) + 1]
+            ok_before = (not before) or before in "·-/|、,， 　(（"
+            # 注意：空字符串是任何字符串的子串，after 为空时必须直接判通过，
+            # 否则「北京」这种恰好等于城市的写法会被误判为不匹配。
+            ok_after = (not after) or not (
+                after in "路街巷弄道号栋楼座层"
+                or (after == "大" and location[idx + len(needle):].startswith("大学"))
+                or after in "店公"
+            )
+            if ok_before and ok_after:
+                return True
+            start = idx + 1
 
     @staticmethod
     def match_keyword(blob: str, keyword: str) -> bool:
@@ -100,7 +120,16 @@ class BaseSource:
             return True
         if not blob:
             return False
-        return keyword.lower() in blob.lower()
+        import re
+        kw = keyword.strip()
+        if not kw:
+            return True
+        # ASCII 词加边界：Java 不命中 JavaScript；中文仍用子串
+        if re.fullmatch(r"[A-Za-z0-9_+#.]+", kw):
+            pat = (r"(?<![A-Za-z0-9_+#])" + re.escape(kw)
+                   + r"(?![A-Za-z0-9_+#])")
+            return re.search(pat, blob, re.IGNORECASE) is not None
+        return kw.lower() in blob.lower()
 
     @staticmethod
     def now_iso() -> str:

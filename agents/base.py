@@ -20,6 +20,7 @@ from typing import Callable, Optional
 
 from models.job import SearchParams, JobInfo, ScrapeResult, ScrapeStatus
 from core.scrapling_engine import ScraplingEngine
+from core.risk_guard import RiskGuard, RiskSignal
 from config import MAX_PAGES_PER_PLATFORM, gaussian_delay
 
 from ._interactions import BrowserInteractionsMixin
@@ -55,8 +56,18 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
         self._log_cb: Optional[Callable] = None
         self._llm = None
         self.engine = ScraplingEngine.get_instance()
+        self.risk = RiskGuard.get_instance()
         # 反爬 / 选择器漂移导致的连续失败计数（成功 1 页即清零）
         self._consecutive_failures = 0
+        # 跨组合累计（lane 模式下由同一 agent 消费多个 kw×city）
+        self._lane_total = 0
+        # 任务级共享的已投/待确认/同公司计数
+        self._registry = None
+        # 跨 lane 投递动作限流（由 MasterAgent 注入）
+        self._apply_sem = None
+        # 本 agent 内的 LLM 缓存，避免跨组合重复调用
+        self._greeting_cache: dict = {}
+        self._rule_cache: dict = {}
         # Stop & global-limit hooks (injected by server / master agent)
         self._stop_check = None        # Callable[[], bool] — returns True if user requested stop
         self._global_limit = None      # int | None — task-level total cap across all platforms
@@ -86,6 +97,14 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
         """
         self._global_limit = limit
         self._global_count_fn = count_fn
+
+    def set_registry(self, registry):
+        """注入任务级 AppliedRegistry（预载的已投/待确认/同公司计数）。"""
+        self._registry = registry
+
+    def set_apply_semaphore(self, sem):
+        """注入跨 lane 的投递动作信号量。"""
+        self._apply_sem = sem
 
     def should_stop(self) -> bool:
         """Sync helper: True if user requested stop OR global cap reached.
@@ -204,9 +223,21 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
         name = self.platform_cfg["name"]
         all_jobs: list[JobInfo] = []
         error_msg = None
+        page = None
         status = ScrapeStatus.SUCCESS
-        # 每次 scrape 开始重置失败计数
-        self._consecutive_failures = 0
+
+        blocked = await self.risk.is_blocked(self.platform_key)
+        if blocked:
+            until = blocked.get("blocked_until") or "?"
+            reason = blocked.get("reason") or blocked.get("state") or ""
+            msg = f"风控冷却中（至 {until}，{reason}）"
+            self.log(f"  [{name}] ⏸ {msg}")
+            self.emit_progress(0, "blocked")
+            return ScrapeResult(
+                platform=self.platform_key, platform_name=name,
+                status=ScrapeStatus.SKIPPED, total_count=0,
+                jobs=[], error_message=msg,
+            )
 
         self.log(f"  [{name}] opening search page...")
         try:
@@ -219,7 +250,28 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
                 )
             page = await self._do_search(params)
 
-            await asyncio.sleep(gaussian_delay(2, 4))
+            await asyncio.sleep(gaussian_delay(0.5, 1.2))
+
+            # 先判登录墙/风控，再等列表容器：挑战页永远不会出现容器
+            if await self._check_login_wall(page):
+                error_msg = f"Need to login {name} first"
+                status = ScrapeStatus.FAILED
+                await self.risk.trip(self.platform_key,
+                                     RiskSignal.LOGIN_REQUIRED, error_msg)
+                self.emit_progress(error_msg, "error")
+                return ScrapeResult(
+                    platform=self.platform_key, platform_name=name,
+                    status=status, total_count=0,
+                    jobs=[], error_message=error_msg,
+                )
+
+            if await self._check_anti_bot(page):
+                return ScrapeResult(
+                    platform=self.platform_key, platform_name=name,
+                    status=ScrapeStatus.SKIPPED, total_count=0,
+                    jobs=[], error_message="风控暂停",
+                )
+
             container_ok = False
             if self.RESULT_CONTAINER_SELECTOR:
                 try:
@@ -234,24 +286,16 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
                 # 平台未配置容器选择器，视为已就绪
                 container_ok = True
 
-            if await self._check_login_wall(page):
-                error_msg = f"Need to login {name} first"
-                status = ScrapeStatus.FAILED
-                self.emit_progress(error_msg, "error")
-                return ScrapeResult(
-                    platform=self.platform_key, platform_name=name,
-                    status=status, total_count=0,
-                    jobs=[], error_message=error_msg,
-                )
-
-            await self.scroll_page(page, times=self.SCROLL_TIMES_FIRST)
+            if not await self._list_ready(page):
+                await self.scroll_page(page, times=self.SCROLL_TIMES_FIRST)
             page_jobs = await self.extract_list_page(page, params)
             if page_jobs:
                 self._consecutive_failures = 0
                 self._log_extraction_quality(page_jobs)
                 all_jobs.extend(page_jobs)
                 self.stream_new_jobs(page_jobs)
-                self.emit_progress(len(all_jobs))
+                self._lane_total += len(page_jobs)
+                self.emit_progress(self._lane_total)
                 if params.auto_apply and self.DIAGNOSE_CARD_SELECTOR:
                     await self.diagnose_buttons(page, self.DIAGNOSE_CARD_SELECTOR)
                 await self.apply_to_page_jobs(page, page_jobs, params)
@@ -276,7 +320,8 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
                         self._log_extraction_quality(page_jobs)
                         all_jobs.extend(page_jobs)
                         self.stream_new_jobs(page_jobs)
-                        self.emit_progress(len(all_jobs))
+                        self._lane_total += len(page_jobs)
+                        self.emit_progress(self._lane_total)
                         await self.apply_to_page_jobs(page, page_jobs, params)
                     else:
                         try:
@@ -307,13 +352,15 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
                 if not has_next:
                     break
                 await asyncio.sleep(gaussian_delay(*self.PAGE_TURN_DELAY))
-                await self.scroll_page(page, times=self.SCROLL_TIMES_NEXT)
+                if not await self._list_ready(page):
+                    await self.scroll_page(page, times=self.SCROLL_TIMES_NEXT)
                 page_jobs = await self.extract_list_page(page, params)
                 if page_jobs:
                     self._consecutive_failures = 0
                     all_jobs.extend(page_jobs)
                     self.stream_new_jobs(page_jobs)
-                    self.emit_progress(len(all_jobs))
+                    self._lane_total += len(page_jobs)
+                    self.emit_progress(self._lane_total)
                     await self.apply_to_page_jobs(page, page_jobs, params)
                     if self.limit_reached(params):
                         print(f"  [{name}] 已达投递上限，停止翻页", flush=True)
@@ -321,12 +368,23 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
                 else:
                     await self._cooldown_after_failure(reason="next_page_empty")
 
-            self.emit_progress(len(all_jobs), "done")
+            self.emit_progress(self._lane_total, "done")
 
         except Exception as e:
             error_msg = str(e)
             status = ScrapeStatus.FAILED if not all_jobs else ScrapeStatus.PARTIAL
             self.emit_progress(error_msg, "error")
+        finally:
+            # 每个组合结束都清理：搜索页 + 平台残留的详情页。
+            try:
+                await self._cleanup_after_scrape()
+            except Exception:
+                pass
+            if page is not None:
+                try:
+                    await page.close()
+                except Exception:
+                    pass
 
         return ScrapeResult(
             platform=self.platform_key, platform_name=name,
@@ -355,8 +413,21 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
         return False
 
     async def _check_anti_bot(self, page) -> bool:
-        """翻页前的反爬拦截检测。默认不检查。"""
-        return False
+        """全链路风控检测：URL / DOM / 网络响应 / 登录态。
+
+        命中后写入平台级冷却并停止本平台后续动作；其他平台不受影响。
+        """
+        signal, evidence = await self.risk.inspect(page, self.platform_key)
+        if signal == RiskSignal.OK:
+            return False
+        until = await self.risk.trip(self.platform_key, signal, evidence)
+        self._platform_done = True
+        self.log(
+            f"  [{self.platform_cfg['name']}] 🚨 风控信号 {signal.value}: "
+            f"{evidence} → 暂停至 {until}（可调用 /api/risk/clear 手动解除）"
+        )
+        self.emit_progress(0, "blocked")
+        return True
 
     async def _click_next(self, page) -> bool:
         """翻页：默认使用通用 click_next_page，子类可针对自家分页器覆盖。"""
@@ -390,6 +461,10 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
         await self.click_search_button(page, self.SEARCH_BUTTON_SELECTORS)
         return page
 
+    async def _cleanup_after_scrape(self):
+        """组合结束后的平台清理钩子（关闭 pending 详情页等）。"""
+        return None
+
     # ──────── 抽象方法 ────────
 
     @abstractmethod
@@ -414,6 +489,18 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
 
     async def scroll_page(self, page, times: int = 3):
         await self.engine.scroll_page(page, times)
+
+    async def _list_ready(self, page, threshold: int = 25) -> bool:
+        """列表卡片已足够多时跳过滚动（省 2–3s/页）。"""
+        sel = self.DIAGNOSE_CARD_SELECTOR or self.RESULT_CONTAINER_SELECTOR
+        if not sel:
+            return False
+        try:
+            n = await self.eval_js(
+                page, f"() => document.querySelectorAll({sel!r}).length")
+            return bool(n and int(n) >= threshold)
+        except Exception:
+            return False
 
     async def random_delay(self, min_s: float = None, max_s: float = None):
         await asyncio.sleep(gaussian_delay(min_s or 2, max_s or 5))
@@ -577,6 +664,8 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
             self.log(f"  [{name}] 完成，获取 {count} 条")
         elif status == "error":
             self.log(f"  [{name}] 出错: {count}")
+        elif status == "blocked":
+            self.log(f"  [{name}] ⏸ 风控暂停，等待人工处理/冷却结束")
         else:
             self.log(f"  [{name}] 正在抓取... 已获取 {count} 条")
         if self._progress_cb:

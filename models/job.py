@@ -12,6 +12,21 @@ class ScrapeStatus(Enum):
     SKIPPED = "skipped"
 
 
+class ApplyOutcome(Enum):
+    """单条投递的结果语义。
+
+    SUCCESS   有明确成功回执（已投递/已发送/已申请）
+    UNCERTAIN 点击发生了，但拿不到明确回执（可能已发出，也可能没有）
+    FAILED    明确失败（按钮不存在、弹窗报错、页面异常）
+    BLOCKED   命中风控/登录墙，应停止该平台
+    """
+    SUCCESS = "success"
+    UNCERTAIN = "uncertain"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+    ALREADY = "already"
+
+
 @dataclass
 class SearchParams:
     """标准化搜索参数"""
@@ -46,6 +61,8 @@ class SearchParams:
     max_per_company_per_day: Optional[int] = None   # None=不限
     # 预演模式：跑完全流程但不点真按钮，apply_status 标 "dry_run"
     dry_run: bool = False
+    # 投递模式：auto=正常发送；draft=只填招呼语不点发送（结果记 uncertain）
+    apply_mode: str = "auto"
     # 经验/学历多选（OR 语义：命中任一即放行）。空列表=不限。
     # 与旧的单值 experience/education 共存：_filters.py 会优先用列表，列表为空时回退到单值。
     experiences: list = field(default_factory=list)   # 如 ["1-3年", "5-10年"]
@@ -108,7 +125,7 @@ class JobInfo:
 
     # 投递状态
     applied: bool = False                             # 是否已投递
-    apply_status: Optional[str] = None                # applied/skipped/failed/login_required/dry_run
+    apply_status: Optional[str] = None                # applied/uncertain/skipped/failed/login_required/dry_run
     greeting_sent: Optional[str] = None               # 发送的打招呼语
     apply_skip_reason: Optional[str] = None           # 跳过/失败原因（如 LLM 规则匹配）
 

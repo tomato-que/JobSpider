@@ -15,7 +15,7 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 from typing import Optional
 
 from config import ROOT_DIR
@@ -23,11 +23,14 @@ from config import ROOT_DIR
 DB_DIR = ROOT_DIR / "data"
 DB_PATH = DB_DIR / "jobs.db"
 
-# 串行化写：sqlite3 在多线程并发写时容易 "database is locked"
-_write_lock = Lock()
+# sqlite3 连接不是线程安全的：读和写都可能通过 asyncio.to_thread 落在不同线程。
+# 用一把可重入锁串行化所有 _conn() 访问（本地工具数据量小，锁开销可忽略）。
+_db_lock = RLock()
+# 兼容旧代码里的 db._write_lock 引用
+_write_lock = _db_lock
 
 # 单一长连接 + 锁保护读写。避免每次查询都重新 connect + PRAGMA。
-# check_same_thread=False 配合 _write_lock 串行化即可安全跨线程使用。
+# check_same_thread=False 配合 _db_lock 串行化即可安全跨线程使用。
 _conn_singleton: Optional[sqlite3.Connection] = None
 
 
@@ -47,7 +50,7 @@ def _conn() -> sqlite3.Connection:
 
 
 def _init_sync():
-    with _conn() as c:
+    with _db_lock, _conn() as c:
         c.executescript("""
         CREATE TABLE IF NOT EXISTS tasks (
             task_id TEXT PRIMARY KEY,
@@ -91,6 +94,29 @@ def _init_sync():
         CREATE INDEX IF NOT EXISTS idx_jobs_company_status_updated ON jobs(company_name, apply_status, updated_at);
         """)
 
+        # ---- 迁移：applied_at / attempted_at / platform_risk ----
+        cols = {r["name"] for r in c.execute("PRAGMA table_info(jobs)").fetchall()}
+        if "applied_at" not in cols:
+            c.execute("ALTER TABLE jobs ADD COLUMN applied_at TEXT")
+        if "attempted_at" not in cols:
+            c.execute("ALTER TABLE jobs ADD COLUMN attempted_at TEXT")
+        # 旧库里的已投递记录没有 applied_at：用 updated_at 回填
+        c.execute(
+            "UPDATE jobs SET applied_at = updated_at "
+            "WHERE apply_status = 'applied' AND applied_at IS NULL"
+        )
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS platform_risk (
+                platform TEXT PRIMARY KEY,
+                state TEXT NOT NULL,
+                blocked_until TEXT,
+                reason TEXT,
+                updated_at TEXT
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_applied_at ON jobs(applied_at)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_jobs_attempted_at ON jobs(attempted_at)")
+
 
 async def init_db():
     """应用启动时调用一次"""
@@ -109,19 +135,19 @@ async def close_db():
 
 def _save_task(task_id: str, params: dict, status: str):
     now = datetime.now().isoformat()
-    with _write_lock, _conn() as c:
+    with _db_lock, _conn() as c:
+        # 只更新 status/params；started_at、finished_at、error、计数保持原值，
+        # 避免重复保存（例如状态从 pending -> running）把开始时间重置。
         c.execute("""
-            INSERT OR REPLACE INTO tasks
+            INSERT INTO tasks
                 (task_id, status, params_json, started_at, finished_at, error,
                  total, applied)
-            VALUES (?, ?, ?, ?,
-                    (SELECT finished_at FROM tasks WHERE task_id=?),
-                    (SELECT error FROM tasks WHERE task_id=?),
-                    COALESCE((SELECT total FROM tasks WHERE task_id=?), 0),
-                    COALESCE((SELECT applied FROM tasks WHERE task_id=?), 0))
+            VALUES (?, ?, ?, ?, NULL, NULL, 0, 0)
+            ON CONFLICT(task_id) DO UPDATE SET
+                status = excluded.status,
+                params_json = excluded.params_json
         """, (task_id, status,
-              json.dumps(params, ensure_ascii=False, default=str), now,
-              task_id, task_id, task_id, task_id))
+              json.dumps(params, ensure_ascii=False, default=str), now))
 
 
 async def save_task(task_id: str, params: dict, status: str = "pending"):
@@ -142,7 +168,7 @@ def _update_task(task_id: str, status, error, finished):
     if not fields:
         return
     vals.append(task_id)
-    with _write_lock, _conn() as c:
+    with _db_lock, _conn() as c:
         c.execute(f"UPDATE tasks SET {', '.join(fields)} WHERE task_id = ?", vals)
 
 
@@ -155,7 +181,7 @@ async def update_task(task_id: str, *, status: Optional[str] = None,
 
 
 def _refresh_counters(task_id: str):
-    with _write_lock, _conn() as c:
+    with _db_lock, _conn() as c:
         row = c.execute("""
             SELECT COUNT(*) AS total,
                    SUM(CASE WHEN apply_status='applied' THEN 1 ELSE 0 END) AS applied
@@ -173,7 +199,7 @@ async def refresh_task_counters(task_id: str):
 
 
 def _list_tasks(limit: int):
-    with _conn() as c:
+    with _db_lock, _conn() as c:
         rows = c.execute("""
             SELECT task_id, status, params_json, started_at, finished_at,
                    error, total, applied
@@ -201,7 +227,7 @@ async def list_tasks(limit: int = 50) -> list[dict]:
 
 
 def _get_task(task_id: str):
-    with _conn() as c:
+    with _db_lock, _conn() as c:
         r = c.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
     if not r:
         return None
@@ -222,7 +248,7 @@ async def get_task(task_id: str) -> Optional[dict]:
 
 
 def _delete_task(task_id: str):
-    with _write_lock, _conn() as c:
+    with _db_lock, _conn() as c:
         c.execute("DELETE FROM jobs WHERE task_id = ?", (task_id,))
         c.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
 
@@ -238,7 +264,7 @@ def _purge_old_tasks(days: int = 7) -> int:
     """删除超过 days 天的任务及其职位（CASCADE）"""
     from datetime import timedelta
     cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-    with _write_lock, _conn() as c:
+    with _db_lock, _conn() as c:
         rows = c.execute(
             "SELECT task_id FROM tasks WHERE started_at < ?", (cutoff,)
         ).fetchall()
@@ -263,7 +289,7 @@ async def purge_old_tasks(days: int = 7) -> int:
 
 
 def _delete_all_tasks() -> int:
-    with _write_lock, _conn() as c:
+    with _db_lock, _conn() as c:
         n = c.execute("SELECT COUNT(*) AS n FROM tasks").fetchone()["n"]
         c.execute("DELETE FROM jobs")
         c.execute("DELETE FROM tasks")
@@ -291,14 +317,19 @@ def _upsert_job(task_id: str, job: dict):
     if not platform or not job_id:
         return
     now = datetime.now().isoformat()
-    with _write_lock, _conn() as c:
+    status = job.get("apply_status")
+    # applied_at 只在“第一次真正投递成功”时写入；attempted_at 记录任何一次真实点击。
+    applied_at = now if status == "applied" else None
+    attempted_at = now if status in ("applied", "uncertain", "failed") else None
+    with _db_lock, _conn() as c:
         c.execute("""
             INSERT INTO jobs (task_id, platform, job_id, job_title, company_name,
                               salary_range, salary_min, salary_max, city,
                               experience_required, education_required, job_url,
                               apply_status, apply_skip_reason, greeting_sent,
+                              applied_at, attempted_at,
                               data_json, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(task_id, platform, job_id) DO UPDATE SET
                 job_title=excluded.job_title,
                 company_name=excluded.company_name,
@@ -309,9 +340,18 @@ def _upsert_job(task_id: str, job: dict):
                 experience_required=excluded.experience_required,
                 education_required=excluded.education_required,
                 job_url=excluded.job_url,
-                apply_status=COALESCE(excluded.apply_status, jobs.apply_status),
+                -- 状态只升不降：applied/uncertain 不会被后续重抓的 skipped 覆盖
+                apply_status = CASE
+                    WHEN jobs.apply_status = 'applied' THEN 'applied'
+                    WHEN excluded.apply_status = 'applied' THEN 'applied'
+                    WHEN jobs.apply_status = 'uncertain' THEN 'uncertain'
+                    WHEN excluded.apply_status IS NOT NULL THEN excluded.apply_status
+                    ELSE jobs.apply_status
+                END,
                 apply_skip_reason=COALESCE(excluded.apply_skip_reason, jobs.apply_skip_reason),
                 greeting_sent=COALESCE(excluded.greeting_sent, jobs.greeting_sent),
+                applied_at=COALESCE(jobs.applied_at, excluded.applied_at),
+                attempted_at=COALESCE(excluded.attempted_at, jobs.attempted_at),
                 data_json=excluded.data_json,
                 updated_at=excluded.updated_at
         """, (
@@ -322,8 +362,9 @@ def _upsert_job(task_id: str, job: dict):
             job.get("city"),
             job.get("experience_required"), job.get("education_required"),
             job.get("job_url"),
-            job.get("apply_status"), job.get("apply_skip_reason"),
+            status, job.get("apply_skip_reason"),
             job.get("greeting_sent"),
+            applied_at, attempted_at,
             json.dumps(job, ensure_ascii=False, default=str),
             now, now,
         ))
@@ -337,7 +378,7 @@ async def upsert_job(task_id: str, job: dict):
 
 
 def _get_task_jobs(task_id: str, offset: int, limit: int):
-    with _conn() as c:
+    with _db_lock, _conn() as c:
         total = c.execute(
             "SELECT COUNT(*) AS n FROM jobs WHERE task_id = ?", (task_id,)
         ).fetchone()["n"]
@@ -367,7 +408,7 @@ async def get_task_jobs(task_id: str, offset: int = 0,
 
 def _get_recent_jobs(limit: int, only_applied: bool):
     where = "WHERE apply_status='applied'" if only_applied else ""
-    with _conn() as c:
+    with _db_lock, _conn() as c:
         rows = c.execute(f"""
             SELECT data_json FROM jobs {where}
             ORDER BY updated_at DESC
@@ -405,12 +446,12 @@ def _to_float(v):
 
 def _count_applied_since(platform: str, since_iso: str) -> int:
     """SQL: 计算指定平台自 since_iso 以来 apply_status='applied' 的条数。"""
-    with _conn() as c:
+    with _db_lock, _conn() as c:
         row = c.execute("""
             SELECT COUNT(*) AS n FROM jobs
             WHERE platform = ?
               AND apply_status = 'applied'
-              AND updated_at >= ?
+              AND applied_at >= ?
         """, (platform, since_iso)).fetchone()
     return int(row["n"]) if row else 0
 
@@ -436,12 +477,12 @@ def _count_applied_company_since(company: str, since_iso: str) -> int:
     """SQL: 同公司在指定时间起 apply_status='applied' 的条数 (跨平台)。"""
     if not company:
         return 0
-    with _conn() as c:
+    with _db_lock, _conn() as c:
         row = c.execute("""
             SELECT COUNT(*) AS n FROM jobs
             WHERE company_name = ?
               AND apply_status = 'applied'
-              AND updated_at >= ?
+              AND applied_at >= ?
         """, (company, since_iso)).fetchone()
     return int(row["n"]) if row else 0
 
@@ -464,7 +505,7 @@ async def count_company_applied_today(company: str, hours: int = 24) -> int:
 
 def _count_dry_run_today(task_id: str) -> int:
     """统计某任务的 dry_run 条目（仅供 UI 显示）"""
-    with _conn() as c:
+    with _db_lock, _conn() as c:
         row = c.execute("""
             SELECT COUNT(*) AS n FROM jobs
             WHERE task_id = ? AND apply_status = 'dry_run'
@@ -484,13 +525,13 @@ async def count_task_dry_run(task_id: str) -> int:
 
 def _exists_applied(platform: str, job_id: str, since_iso: str) -> bool:
     """SQL: 是否存在该 platform+job_id 在 since_iso 之后真投过 (apply_status='applied')。"""
-    with _conn() as c:
+    with _db_lock, _conn() as c:
         row = c.execute("""
             SELECT 1 FROM jobs
             WHERE platform = ?
               AND job_id = ?
               AND apply_status = 'applied'
-              AND updated_at >= ?
+              AND applied_at >= ?
             LIMIT 1
         """, (platform, job_id, since_iso)).fetchone()
     return bool(row)
@@ -515,6 +556,204 @@ async def has_applied_before(platform: str, job_id: str, hours: int = 168) -> bo
         return False
 
 
+# ───────── 任务启动时预载的批量查询（AppliedRegistry） ─────────
+
+def _get_applied_keys_since(since_iso: str):
+    with _db_lock, _conn() as c:
+        rows = c.execute("""
+            SELECT DISTINCT platform, job_id FROM jobs
+            WHERE apply_status = 'applied' AND applied_at >= ?
+        """, (since_iso,)).fetchall()
+    return {(r["platform"], r["job_id"]) for r in rows}
+
+
+async def get_applied_keys(hours: int = 168) -> set:
+    """过去 N 小时真正投递过的 (platform, job_id) 集合。"""
+    from datetime import timedelta
+    since = (datetime.now() - timedelta(hours=hours)).isoformat()
+    try:
+        return await asyncio.to_thread(_get_applied_keys_since, since)
+    except Exception as e:
+        print(f"  [DB] get_applied_keys 失败: {e}", flush=True)
+        return set()
+
+
+def _get_uncertain_keys_since(since_iso: str):
+    with _db_lock, _conn() as c:
+        rows = c.execute("""
+            SELECT DISTINCT platform, job_id FROM jobs
+            WHERE apply_status = 'uncertain' AND attempted_at >= ?
+        """, (since_iso,)).fetchall()
+    return {(r["platform"], r["job_id"]) for r in rows}
+
+
+async def get_uncertain_keys(hours: int = 24) -> set:
+    from datetime import timedelta
+    since = (datetime.now() - timedelta(hours=hours)).isoformat()
+    try:
+        return await asyncio.to_thread(_get_uncertain_keys_since, since)
+    except Exception as e:
+        print(f"  [DB] get_uncertain_keys 失败: {e}", flush=True)
+        return set()
+
+
+def _get_company_counts_since(since_iso: str):
+    with _db_lock, _conn() as c:
+        rows = c.execute("""
+            SELECT company_name, COUNT(*) AS n FROM jobs
+            WHERE apply_status = 'applied' AND applied_at >= ?
+              AND company_name IS NOT NULL AND company_name <> ''
+            GROUP BY company_name
+        """, (since_iso,)).fetchall()
+    return {r["company_name"]: int(r["n"]) for r in rows}
+
+
+async def get_company_applied_counts(hours: int = 24) -> dict:
+    from datetime import timedelta
+    since = (datetime.now() - timedelta(hours=hours)).isoformat()
+    try:
+        return await asyncio.to_thread(_get_company_counts_since, since)
+    except Exception as e:
+        print(f"  [DB] get_company_applied_counts 失败: {e}", flush=True)
+        return {}
+
+
+def _get_applied_counts_by_platform(since_iso: str):
+    with _db_lock, _conn() as c:
+        rows = c.execute("""
+            SELECT platform, COUNT(*) AS n FROM jobs
+            WHERE apply_status = 'applied' AND applied_at >= ?
+            GROUP BY platform
+        """, (since_iso,)).fetchall()
+    return {r["platform"]: int(r["n"]) for r in rows}
+
+
+async def get_applied_counts_by_platform(hours: int = 24) -> dict:
+    from datetime import timedelta
+    since = (datetime.now() - timedelta(hours=hours)).isoformat()
+    try:
+        return await asyncio.to_thread(_get_applied_counts_by_platform, since)
+    except Exception as e:
+        print(f"  [DB] get_applied_counts_by_platform 失败: {e}", flush=True)
+        return {}
+
+
+def _exists_uncertain(platform: str, job_id: str, since_iso: str) -> bool:
+    with _db_lock, _conn() as c:
+        row = c.execute("""
+            SELECT 1 FROM jobs
+            WHERE platform = ? AND job_id = ?
+              AND apply_status = 'uncertain' AND attempted_at >= ?
+            LIMIT 1
+        """, (platform, job_id, since_iso)).fetchone()
+    return bool(row)
+
+
+async def has_uncertain_before(platform: str, job_id: str,
+                               hours: int = 24) -> bool:
+    """过去 N 小时内是否对该职位有过“待确认”的点击（避免重复打扰）。"""
+    from datetime import timedelta
+    if not platform or not job_id:
+        return False
+    since = (datetime.now() - timedelta(hours=hours)).isoformat()
+    try:
+        return await asyncio.to_thread(_exists_uncertain, platform, job_id, since)
+    except Exception as e:
+        print(f"  [DB] has_uncertain_before 失败: {e}", flush=True)
+        return False
+
+
+# ───────── 平台风控冷却（跨任务） ─────────
+
+def _set_platform_risk(platform: str, state: str,
+                       blocked_until: Optional[str], reason: str):
+    now = datetime.now().isoformat()
+    with _db_lock, _conn() as c:
+        c.execute("""
+            INSERT INTO platform_risk
+                (platform, state, blocked_until, reason, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(platform) DO UPDATE SET
+                state = excluded.state,
+                blocked_until = excluded.blocked_until,
+                reason = excluded.reason,
+                updated_at = excluded.updated_at
+        """, (platform, state, blocked_until, reason, now))
+
+
+async def set_platform_risk(platform: str, state: str,
+                            blocked_until: Optional[str], reason: str):
+    try:
+        await asyncio.to_thread(_set_platform_risk, platform, state,
+                                blocked_until, reason)
+    except Exception as e:
+        print(f"  [DB] set_platform_risk 失败: {e}", flush=True)
+
+
+def _get_platform_risk(platform: str):
+    with _db_lock, _conn() as c:
+        r = c.execute(
+            "SELECT * FROM platform_risk WHERE platform = ?", (platform,)
+        ).fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    bu = d.get("blocked_until")
+    if bu:
+        try:
+            if datetime.fromisoformat(bu) <= datetime.now():
+                return None
+        except Exception:
+            pass
+    return d
+
+
+async def get_platform_risk(platform: str) -> Optional[dict]:
+    try:
+        return await asyncio.to_thread(_get_platform_risk, platform)
+    except Exception as e:
+        print(f"  [DB] get_platform_risk 失败: {e}", flush=True)
+        return None
+
+
+def _list_platform_risks():
+    with _db_lock, _conn() as c:
+        rows = c.execute("SELECT * FROM platform_risk").fetchall()
+    now = datetime.now()
+    out = []
+    for r in rows:
+        d = dict(r)
+        bu = d.get("blocked_until")
+        if bu:
+            try:
+                if datetime.fromisoformat(bu) <= now:
+                    continue
+            except Exception:
+                pass
+        out.append(d)
+    return out
+
+
+async def list_platform_risks() -> list:
+    try:
+        return await asyncio.to_thread(_list_platform_risks)
+    except Exception as e:
+        print(f"  [DB] list_platform_risks 失败: {e}", flush=True)
+        return []
+
+
+def _clear_platform_risk(platform: str):
+    with _db_lock, _conn() as c:
+        c.execute("DELETE FROM platform_risk WHERE platform = ?", (platform,))
+
+
+async def clear_platform_risk(platform: str):
+    try:
+        await asyncio.to_thread(_clear_platform_risk, platform)
+    except Exception as e:
+        print(f"  [DB] clear_platform_risk 失败: {e}", flush=True)
+
+
 def _normalize_skip_reason(reason) -> str:
     """把自由文本的 skip 原因归一化成短而稳定的桶标签。
     取第一个分隔符 ( : ： , 之前的前缀；空则归 '其他'。"""
@@ -531,10 +770,11 @@ def _normalize_skip_reason(reason) -> str:
 
 def _task_skip_breakdown(task_id: str) -> dict:
     """SQL: 一次性算出各状态计数 + 取出 skipped 行的原因（在 Python 里归一化分组）。"""
-    with _conn() as c:
+    with _db_lock, _conn() as c:
         row = c.execute("""
             SELECT
                 SUM(CASE WHEN apply_status='applied' THEN 1 ELSE 0 END) AS applied,
+                SUM(CASE WHEN apply_status='uncertain' THEN 1 ELSE 0 END) AS uncertain,
                 SUM(CASE WHEN apply_status='dry_run' THEN 1 ELSE 0 END) AS dry_run,
                 SUM(CASE WHEN apply_status='failed'  THEN 1 ELSE 0 END) AS failed,
                 SUM(CASE WHEN apply_status='skipped' THEN 1 ELSE 0 END) AS skipped,
@@ -551,6 +791,7 @@ def _task_skip_breakdown(task_id: str) -> dict:
         skip_reasons[label] = skip_reasons.get(label, 0) + 1
     return {
         "applied": int(row["applied"] or 0),
+        "uncertain": int(row["uncertain"] or 0),
         "dry_run": int(row["dry_run"] or 0),
         "failed": int(row["failed"] or 0),
         "skipped": int(row["skipped"] or 0),
@@ -567,6 +808,6 @@ async def get_task_skip_breakdown(task_id: str) -> dict:
         return await asyncio.to_thread(_task_skip_breakdown, task_id)
     except Exception as e:
         print(f"  [DB] get_task_skip_breakdown 失败: {e}", flush=True)
-        return {"applied": 0, "dry_run": 0, "failed": 0,
+        return {"applied": 0, "uncertain": 0, "dry_run": 0, "failed": 0,
                 "skipped": 0, "total": 0, "skip_reasons": {}}
 

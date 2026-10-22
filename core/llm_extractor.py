@@ -189,14 +189,69 @@ DOM:
             return result
         return []
 
+    async def parse_resume(self, resume_text: str) -> dict:
+        """把简历原文解析成结构化摘要；失败返回 {}。"""
+        if not resume_text or not resume_text.strip():
+            return {}
+        if not await self._get_client():
+            return {}
+
+        prompt = f"""你是简历解析器。只提取简历中明确写出的事实，不要推测、不要补全。
+返回 JSON（不要 markdown 包裹）：
+{{
+  "name": "姓名，找不到则 null",
+  "years": 工作年限数字或 null,
+  "current_role": "当前/最近职位，找不到则 null",
+  "skills": ["硬技能/技术栈/行业能力"],
+  "highlights": ["代表项目、成果或职责"],
+  "education": "最高学历/学校/专业，找不到则 null",
+  "preferred_roles": ["求职方向"]
+}}
+
+规则：
+- skills 最多 15 个，优先具体技术、工具、业务能力
+- highlights 2-5 条，每条不超过 40 字，必须来自简历
+- 不输出手机号、邮箱、身份证、住址、政治面貌等隐私信息
+- 没有信息的字段用 null 或 []
+
+简历:
+{resume_text[:6000]}"""
+        data = await self._chat_to_json(
+            prompt, default={}, temperature=0.1, max_tokens=600,
+            tag="parse_resume",
+        )
+        return data if isinstance(data, dict) else {}
+
     async def generate_greeting(self, job_title: str, company_name: str,
-                                jd_text: str, user_template: str = None) -> str:
-        """根据岗位JD生成个性化打招呼语"""
+                                jd_text: str, user_template: str = None,
+                                resume_text: str = "") -> str:
+        """根据岗位 JD（以及可选的简历摘要）生成个性化打招呼语。"""
         client = await self._get_client()
         if not client:
             return self._fallback_greeting(job_title, company_name)
 
-        prompt = f"""你是一个正在求职的候选人。根据以下职位信息，生成一段专业、简洁的打招呼语（50-100字）。
+        resume_text = (resume_text or "").strip()[:1200]
+        if resume_text:
+            prompt = f"""你是一个正在求职的候选人。请结合【简历摘要】和【职位信息】，生成一段专业、简洁的打招呼语（50-100字）。
+要求：
+- 只使用简历摘要中明确存在的信息，禁止编造公司、项目、年限、学历、技术栈
+- 从简历中挑 1-2 个与 JD 最匹配的技能或经历，简要提及
+- 如果简历与岗位不匹配，表达兴趣和可迁移能力，不要硬编
+- 不要吹嘘"丰富的经验""深厚的功底""多年经验"等，保持谦虚诚恳
+- 语气自然真诚，不要过于客套；不要使用"贵公司"等过于正式的表达
+- 不要输出手机号、邮箱等联系方式
+
+职位: {job_title}
+公司: {company_name}
+JD详情: {jd_text[:1500]}
+
+简历摘要:
+{resume_text}
+{f'参考模板风格: {user_template}' if user_template else ''}
+
+直接输出打招呼语文本，不要任何前缀或解释。"""
+        else:
+            prompt = f"""你是一个正在求职的候选人。根据以下职位信息，生成一段专业、简洁的打招呼语（50-100字）。
 要求：
 - 表达对该职位的兴趣
 - 可以简要提及自己关注的技术方向或职责，但不要编造具体经验
@@ -206,7 +261,7 @@ DOM:
 
 职位: {job_title}
 公司: {company_name}
-JD详情: {jd_text[:1200]}
+JD详情: {jd_text[:1500]}
 {f'参考模板风格: {user_template}' if user_template else ''}
 
 直接输出打招呼语文本，不要任何前缀或解释。"""
@@ -217,7 +272,7 @@ JD详情: {jd_text[:1200]}
             async with _llm_semaphore:
                 resp = await client.chat(
                     [llm_message("user", prompt)],
-                    temperature=0.7, max_tokens=200
+                    temperature=0.7, max_tokens=220
                 )
             greeting = resp.content.strip().strip('"').strip("'")
             if len(greeting) > 200:

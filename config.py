@@ -133,9 +133,17 @@ PLATFORM_CONFIG = {
 
 
 def gaussian_delay(min_delay: float = 1.0, max_delay: float = 5.0) -> float:
-    """高斯抖动延迟 — 模拟人类操作间隔"""
-    delay = random.gauss(GAUSSIAN_JITTER_MEAN, GAUSSIAN_JITTER_STD)
-    return max(min_delay, min(max_delay, delay))
+    """高斯抖动延迟 — 按传入区间推导分布，保证窄区间也有抖动。
+
+    旧实现固定从 N(3.5, 1.2) 抽样再 clamp，导致所有小于 ~2.3s 的区间
+    （0.2–0.6、0.3–0.6、0.5–1.0）都恒等于上界，等于没有抖动。
+    """
+    lo, hi = float(min_delay), float(max_delay)
+    if hi <= lo:
+        return lo
+    mean = (lo + hi) / 2.0
+    std = max((hi - lo) / 4.0, 0.05)
+    return max(lo, min(hi, random.gauss(mean, std)))
 
 
 # 平台每 24h 滚动窗口的"硬上限"（参考各平台公开/经验数据）

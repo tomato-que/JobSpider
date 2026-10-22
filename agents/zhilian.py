@@ -7,8 +7,9 @@ import asyncio
 import hashlib
 import json
 
-from models.job import SearchParams, JobInfo
+from models.job import SearchParams, JobInfo, ApplyOutcome
 from agents.base import BaseAgent
+from agents._apply import js_literal
 from config import gaussian_delay
 
 
@@ -48,40 +49,10 @@ class ZhilianAgent(BaseAgent):
         }"""))
 
     async def _check_anti_bot(self, page) -> bool:
-        try:
-            url = await self.engine.current_url(page)
-            if any(k in (url or "").lower() for k in ("captcha", "verify", "secure")):
-                self.log(f"  [智联招聘] 🚨 anti-bot URL detected: {url[:80]}")
-                return True
-            hit = await self.eval_js(page, """() => {
-                const sel = [
-                    '.captcha-mask', '.verify-mask', '.geetest_holder',
-                    '.geetest_panel', '.nc_iconfont', '.nc-container',
-                    '.captcha-box', '[class*="captcha"]',
-                    '.zppp-modal__login.show', '.sign-dialog.show',
-                ];
-                for (const s of sel) {
-                    const el = document.querySelector(s);
-                    if (el && el.offsetParent !== null
-                        && el.offsetWidth > 50 && el.offsetHeight > 50) {
-                        return el.className || s;
-                    }
-                }
-                const body = (document.body?.innerText || '').slice(0, 4000);
-                if (/请完成.{0,4}验证|滑动.{0,4}验证|安全验证|系统检测到|访问过于频繁/.test(body))
-                    return 'text_match';
-                return '';
-            }""")
-            if hit:
-                self.log(f"  [智联招聘] 🚨 anti-bot DOM: {hit}")
-                return True
-        except Exception as e:
-            print(f"  [智联 anti-bot check] {e}", flush=True)
-        return False
+        return await super()._check_anti_bot(page)
 
     async def _select_city(self, page, city: str) -> bool:
         """智联城市选择：点击'地点'筛选器 → 选择城市"""
-        safe_city = city.replace("'", "\\'")
         # 先尝试点击"地点"文本打开城市下拉
         opened = await self.eval_js(page, """() => {
             const els = document.querySelectorAll(
@@ -109,6 +80,7 @@ class ZhilianAgent(BaseAgent):
 
         # 在展开的面板中找到目标城市
         selected = await self.eval_js(page, f"""() => {{
+            const CITY = {js_literal(city)};
             const candidates = document.querySelectorAll(
                 '.query-location a, .query-location li, .query-location span, '
                 + '[class*="location"] a, [class*="location"] li, '
@@ -118,7 +90,7 @@ class ZhilianAgent(BaseAgent):
             );
             for (const el of candidates) {{
                 const t = el.textContent?.trim();
-                if (t === '{safe_city}' && el.offsetParent !== null
+                if (t === CITY && el.offsetParent !== null
                     && el.childElementCount === 0
                     && el.offsetHeight < 50 && el.offsetHeight > 5) {{
                     el.click();
@@ -127,7 +99,7 @@ class ZhilianAgent(BaseAgent):
             }}
             for (const el of candidates) {{
                 const t = el.textContent?.trim();
-                if (t && t.startsWith('{safe_city}') && t.length < {len(city) + 5}
+                if (t && t.startsWith(CITY) && t.length < {len(city) + 5}
                     && el.offsetParent !== null
                     && el.offsetHeight < 50 && el.offsetHeight > 5) {{
                     el.click();
@@ -166,6 +138,24 @@ class ZhilianAgent(BaseAgent):
         return page
 
     async def _click_next(self, page) -> bool:
+        find_js = """() => {
+            const btns = document.querySelectorAll('a.soupager__btn');
+            for (const btn of btns) {
+                if (btn.textContent.trim() === '下一页'
+                    && !btn.classList.contains('soupager__btn--disable')
+                    && btn.offsetParent !== null) {
+                    btn.scrollIntoView({behavior: 'instant', block: 'center'});
+                    const r = btn.getBoundingClientRect();
+                    return {found: true, x: r.left, y: r.top,
+                            w: r.width, h: r.height, text: '下一页'};
+                }
+            }
+            return {found: false};
+        }"""
+        res = await self.human_click(page, find_js,
+                                      before_click_pause=(0.15, 0.35))
+        if res.get("clicked"):
+            return True
         result = await self.eval_js(page, """() => {
             const btns = document.querySelectorAll('a.soupager__btn');
             for (const btn of btns) {
@@ -179,7 +169,7 @@ class ZhilianAgent(BaseAgent):
         }""")
         return bool(result)
 
-    async def apply_to_job(self, page, job, greeting, params) -> bool:
+    async def apply_to_job(self, page, job, greeting, params) -> ApplyOutcome:
         """智联: 点击对应职位卡片的"立即投递"按钮，然后发送打招呼语"""
         find_js = self.build_card_button_finder(
             job,
@@ -193,40 +183,51 @@ class ZhilianAgent(BaseAgent):
         result = await self.human_click(page, find_js)
         if not result.get("clicked"):
             reason = result.get("reason", "unknown")
+            if reason == "already":
+                return ApplyOutcome.ALREADY
+            self._apply_detail = f"[环境] 未找到投递按钮({reason})"
             print(f"  [智联招聘] apply 失败: {reason}", flush=True)
-            return False
+            return ApplyOutcome.FAILED
 
         print(f"  [智联招聘] 鼠标点击了按钮: '{result.get('text', '')}'", flush=True)
-        await asyncio.sleep(gaussian_delay(1.5, 2.5))
 
-        # 检查弹窗是否出现
+        modal_sel = (
+            '.zppp-modal, .dialog-content, .ant-modal, '
+            '[class*="modal"][class*="visible"]'
+        )
+        try:
+            await page.wait_for_selector(modal_sel, timeout=3000, state="visible")
+        except Exception:
+            pass
+
+        if await self._check_anti_bot(page):
+            return ApplyOutcome.BLOCKED
+
         modal_present = await self.eval_js(page, """() => {
             const m = document.querySelector(
-                '.zppp-modal, .dialog-content, .ant-modal, [class*="modal"][class*="visible"]'
+                '.zppp-modal, .dialog-content, .ant-modal, '
+                + '[class*="modal"][class*="visible"]'
             );
             return !!(m && m.offsetParent !== null);
         }""")
         if not modal_present:
-            # 无弹窗 — 智联部分岗位点击"投递"直接提交，不弹对话框
-            # 检查是否有错误
-            has_error = await self.eval_js(page, """() => {
-                const loginDlg = document.querySelector(
-                    '.zppp-modal-login, [class*="login-modal"], [class*="login-pop"]'
-                );
-                if (loginDlg && loginDlg.offsetParent !== null) return 'login';
-                return '';
+            # 无弹窗：部分岗位直接提交；必须找到“已投递/已申请”回执才算成功
+            applied = await self.eval_js(page, """() => {
+                const t = document.body ? document.body.innerText : '';
+                return /已投递|已申请|投递成功|申请成功/.test(t);
             }""")
-            if has_error:
-                print(f"  [智联招聘] 投递后检测到异常: {has_error}", flush=True)
-                return False
-            print(f"  [智联招聘] 直接投递（无确认弹窗）", flush=True)
-            return True
+            if applied:
+                print(f"  [智联招聘] 直接投递（页面显示已投递）", flush=True)
+                return ApplyOutcome.SUCCESS
+            self._apply_detail = "[状态] 点击后无弹窗也无成功回执"
+            print(f"  [智联招聘] 点击后无明确回执，记待确认", flush=True)
+            return ApplyOutcome.UNCERTAIN
 
-        # 尝试在弹窗中填写打招呼语
+        # 弹窗内填写打招呼语
         filled = False
         if greeting:
-            safe_greeting = json.dumps(greeting)[1:-1]  # strip outer quotes
             filled = await self.eval_js(page, f"""() => {{
+                const GREETING = {js_literal(greeting)};
                 const ta = document.querySelector(
                     '.zppp-modal textarea, .greet-textarea textarea, '
                     + '.dialog-content textarea, textarea[placeholder*="打招呼"], '
@@ -237,25 +238,37 @@ class ZhilianAgent(BaseAgent):
                 const setter = Object.getOwnPropertyDescriptor(
                     window.HTMLTextAreaElement.prototype, 'value'
                 ).set;
-                setter.call(ta, '{safe_greeting}');
+                setter.call(ta, GREETING);
                 ta.dispatchEvent(new Event('input', {{ bubbles: true }}));
                 ta.dispatchEvent(new Event('change', {{ bubbles: true }}));
                 return true;
             }}""")
             if filled:
                 print(f"  [智联招聘] 已填打招呼语", flush=True)
-            await asyncio.sleep(gaussian_delay(0.5, 1.0))
+            await asyncio.sleep(gaussian_delay(0.4, 0.8))
 
-        # 点击确认/提交按钮 — 用真实鼠标
-        confirm_find = self.build_modal_button_finder(
-            button_selectors='.zppp-modal .zppp-submit, .dialog-confirm, .btn-primary',
-            button_texts=['发送', '确认', '确定', '提交', '立即沟通', '投递'],
-        )
-        confirm_result = await self.human_click(page, confirm_find)
-        confirmed = confirm_result.get("text") if confirm_result.get("clicked") else None
-        if confirmed:
-            print(f"  [智联招聘] 已确认: '{confirmed}'", flush=True)
-        await asyncio.sleep(gaussian_delay(0.8, 1.2))
+        draft = (getattr(params, "apply_mode", "auto") or "auto").lower() == "draft"
+        if draft and filled:
+            self._apply_detail = "草稿未发送"
+            outcome = ApplyOutcome.UNCERTAIN
+        else:
+            confirm_find = self.build_modal_button_finder(
+                button_selectors='.zppp-modal .zppp-submit, .dialog-confirm, .btn-primary',
+                button_texts=['发送', '确认', '确定', '提交', '立即沟通', '投递'],
+            )
+            confirm_result = await self.human_click(page, confirm_find)
+            confirmed = (confirm_result.get("text")
+                         if confirm_result.get("clicked") else None)
+            if confirmed:
+                print(f"  [智联招聘] 已确认: '{confirmed}'", flush=True)
+                outcome = ApplyOutcome.SUCCESS
+            elif filled:
+                self._apply_detail = "已填写但未点到确认按钮"
+                outcome = ApplyOutcome.UNCERTAIN
+            else:
+                self._apply_detail = "[状态] 弹窗内未找到填框/确认按钮"
+                outcome = ApplyOutcome.FAILED
+        await asyncio.sleep(gaussian_delay(0.5, 0.9))
 
         # 关闭弹窗
         await self.eval_js(page, """() => {
@@ -265,12 +278,10 @@ class ZhilianAgent(BaseAgent):
             if (close) close.click();
         }""")
         await asyncio.sleep(gaussian_delay(0.3, 0.5))
-        # 只有在确认或至少填了招呼时才算成功
-        return bool(confirmed) or bool(filled)
+        return outcome
 
     async def extract_list_page(self, page, params: SearchParams) -> list[JobInfo]:
         try:
-            await asyncio.sleep(1)
             jobs_data = await self.eval_js(page, """() => {
                 const items = document.querySelectorAll('.joblist-box__item');
                 return Array.from(items).map(item => {

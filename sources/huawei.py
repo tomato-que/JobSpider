@@ -1,43 +1,62 @@
 """华为社会招聘 (career.huawei.com) — JSON API 抓取
 
-接口：GET https://career.huawei.com/reccampportal/services/portal/portalpub/getJob/newHr/page/{pageSize}/{pageNum}
-  注意：URL 路径里 pageSize 在前、pageNum 在后（实测）。
-  Referer 推荐：https://career.huawei.com/reccampportal/portal5/social-recruitment.html
-  无 keyWord / keyword 服务端过滤（实测两种参数都不过滤），关键词只能客户端再筛。
+新版站点（2026）接口：
+  POST https://apigw-dgg-b0.huawei.com/api/apig/channelhw/recruitmentPosition/pub/getJobPage?X-HW-ID=app_000000035886
+  Header 必须带 `x-jalor-tenantalias: hcm`，否则返回
+  {"code":"TenantContextError","message":"missing tenant code!!!"}。
+  Body: {"curPage":1,"pageSize":100,"jobType":"SR"}
+    - jobType=SR 社会招聘
+    - keyWord 为服务端关键字过滤（实测有效）
+    - pageSize 最大 100，翻页用 curPage
+  响应: {"status":"SUCCESS","data":{"pageVO":{...},"result":[...]}}
+  旧接口 career.huawei.com/reccampportal/.../page/{size}/{num} 仍可访问，
+  但不带查询参数时只返回 2 条历史数据，已废弃。
 
-响应顶层：
-  {
-    "pageVO": {"totalRows":..., "curPage":..., "pageSize":..., ...},
-    "result": [ {jobname, jobAddress, jobFamilyName, degree, jobId, releaseDate, ...}, ... ]
-  }
+详情页：https://career.huawei.com/cn/job-details?advertisementId={advertisementId}
+  （注意不是 jobId）
 
-jobAddress 是 "China\\Guangdong-Shenzhen,China\\Shanghai-Shanghai,..." 这种英文逗号串，
-需要拆开取 "City" 段并映射回中文（华为列表大部分城市拼音确定，做个常见城市表即可）。
-
-详情页：https://career.huawei.com/reccampportal/portal5/social-recruitment-detail.html?jobId={jobId}
+字段说明：
+  jobName        职位名
+  workPlace      中文工作城市（优先）
+  jobAddress     'China\\Guangdong-Shenzhen'，作为城市兜底
+  jobFamilyName  岗位族 / deptName 部门
+  workYear       '5' 表示 5 年以上
+  jobRequire     任职要求（含「教育背景要求」「语言要求」）
+  mainBusiness   岗位职责
+  lastUpdateDate 更新日期 YYYY-MM-DD
 """
 from __future__ import annotations
 
 from typing import Optional
 
-from .base import BaseSource, make_id
+from .base import (BaseSource, make_id, parse_education, parse_experience)
 from ._http import fetch_json
 
 
-_API_TMPL = (
-    "https://career.huawei.com/reccampportal/services/portal/portalpub/"
-    "getJob/newHr/page/{page_size}/{page_num}"
+_API_URL = (
+    "https://apigw-dgg-b0.huawei.com/api/apig/channelhw/"
+    "recruitmentPosition/pub/getJobPage?X-HW-ID=app_000000035886"
 )
 _DETAIL_TMPL = (
-    "https://career.huawei.com/reccampportal/portal5/"
-    "social-recruitment-detail.html?jobId={job_id}"
+    "https://career.huawei.com/cn/job-details?advertisementId={advert_id}"
 )
-_REFERER = (
-    "https://career.huawei.com/reccampportal/portal5/social-recruitment.html"
-)
+# 新版网关要求的租户/语言头；缺 x-jalor-tenantalias 会直接 500 TenantContextError
+_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    "Content-Type": "application/json",
+    "Origin": "https://career.huawei.com",
+    "Referer": "https://career.huawei.com/",
+    "x-alb-gray": "prod",
+    "x-csrf-token": "",
+    "x-hw-id": "app_000000035886",
+    "x-jalor-tenantalias": "hcm",
+    "x-language": "zh_CN",
+    "x-referer": "https://career.huawei.com/cn",
+}
 
 
-# 英文城市拼音 → 中文（华为 jobAddress 段固定走 China\Province-City）
+# 英文城市拼音 → 中文（jobAddress 兜底用；新版 API 一般直接给中文 workPlace）
 _CITY_CN: dict[str, str] = {
     "Beijing": "北京", "Shanghai": "上海", "Tianjin": "天津",
     "Chongqing": "重庆", "Shenzhen": "深圳", "Guangzhou": "广州",
@@ -57,34 +76,47 @@ _CITY_CN: dict[str, str] = {
 
 
 def _fmt_location(job_address: Optional[str]) -> Optional[str]:
-    """华为 jobAddress 形如 'China\\Guangdong-Shenzhen,China\\Shanghai-Shanghai'。
-    拆分逗号取每段最后的 City，映射到中文，去重保序。多城市用「/」连接。
-    """
-    if not job_address:
+    """'China\\Guangdong-Shenzhen,China\\Shanghai-Shanghai' → '深圳/上海'。"""
+    if not job_address or not isinstance(job_address, str):
         return None
     seen: list[str] = []
     for seg in job_address.split(","):
         seg = seg.strip()
         if not seg:
             continue
-        # 取最后一段：'Province-City' → 'City'；或 'Country\X' → 'X'
         tail = seg.split("\\")[-1].split("/")[-1]
         city_token = tail.split("-")[-1].strip()
         cn = _CITY_CN.get(city_token, city_token)
         if cn and cn not in seen:
             seen.append(cn)
-    if not seen:
-        return None
-    return "/".join(seen[:4])  # 最多展示 4 个，避免 location 字段巨长
+    return "/".join(seen) if seen else None
 
 
 def _iso_date(s: Optional[str]) -> Optional[str]:
-    """华为 releaseDate 形如 '2026-03-19T15:13:52.000+0800'，截到秒。"""
+    """兼容 '2026-03-19T15:13:52.000+0800' 与 '2026-10-16'。"""
     if not s or not isinstance(s, str):
         return None
-    # 去掉毫秒与时区，保留 YYYY-MM-DDTHH:MM:SS
     head = s.split(".")[0].split("+")[0].strip()
     return head or None
+
+
+def _experience(work_year) -> Optional[str]:
+    s = str(work_year or "").strip()
+    if not s:
+        return None
+    if s.isdigit():
+        n = int(s)
+        if n <= 0:
+            return "应届"
+        return f"{n}年+"
+    return parse_experience(s)
+
+
+def _location(row: dict) -> Optional[str]:
+    place = row.get("workPlace")
+    if isinstance(place, str) and place.strip():
+        return place.strip()
+    return _fmt_location(row.get("jobAddress"))
 
 
 class HuaweiSource(BaseSource):
@@ -94,58 +126,91 @@ class HuaweiSource(BaseSource):
 
     async def fetch(self, limit: int = 20,
                     keyword: str = "", city: str = "") -> list[dict]:
-        # 华为 API 不支持服务端关键词过滤，先按 limit*3 抓再客户端筛
-        page_size = max(limit * 3, 30)
-        page_size = min(page_size, 100)
-        url = _API_TMPL.format(page_size=page_size, page_num=1)
-        data = await fetch_json(
-            url,
-            headers={"Referer": _REFERER},
-            ttl=180.0,
-        )
-        if not data or not isinstance(data, dict):
-            return []
-        rows = data.get("result") or []
+        kw = (keyword or "").strip()
+        city_key = (city or "").strip().replace("市", "")
+
+        # 服务端 keyWord 有效；无关键词时多翻几页，给城市/客户端过滤留余量
+        page_size = 100
+        max_pages = 2 if kw else 3
+        rows: list[dict] = []
+        seen_ids: set = set()
+
+        for page_num in range(1, max_pages + 1):
+            body = {"curPage": page_num, "pageSize": page_size,
+                    "jobType": "SR"}
+            if kw:
+                body["keyWord"] = kw
+            data = await fetch_json(
+                _API_URL,
+                method="POST",
+                json_body=body,
+                headers=_HEADERS,
+                ttl=180.0,
+            )
+            if not isinstance(data, dict) or data.get("status") != "SUCCESS":
+                break
+            page_data = data.get("data") or {}
+            page_rows = page_data.get("result") or []
+            page_vo = page_data.get("pageVO") or {}
+            new_count = 0
+            for r in page_rows:
+                if not isinstance(r, dict):
+                    continue
+                jid = r.get("jobId")
+                if jid is None or jid in seen_ids:
+                    continue
+                seen_ids.add(jid)
+                rows.append(r)
+                new_count += 1
+            if new_count == 0:
+                break
+            total_pages = page_vo.get("totalPages") or 0
+            if total_pages and page_num >= total_pages:
+                break
+            if len(page_rows) < page_size:
+                break
+
         if not rows:
             return []
 
-        kw = (keyword or "").strip()
-        city_key = (city or "").strip().replace("市", "")
         out: list[dict] = []
         for r in rows:
-            if not isinstance(r, dict):
-                continue
-            title = (r.get("jobname") or "").strip()
+            title = (r.get("jobName") or r.get("jobNameNew")
+                     or r.get("name") or "").strip()
             job_id = r.get("jobId")
             if not title or job_id is None:
                 continue
 
-            location = _fmt_location(r.get("jobAddress"))
+            location = _location(r)
             family = (r.get("jobFamilyName") or "").strip() or None
-            degree = (r.get("nameCn") and None) or (r.get("degree") or "").strip() or None
-            # 关键词过滤：在 title / family / 业务描述里搜
+            dept = (r.get("deptName") or "").strip() or None
+            require = r.get("jobRequire") or ""
+            main_business = r.get("mainBusiness") or ""
+
             if kw:
-                blob = f"{title} {family or ''} {r.get('mainBusiness') or ''}"
+                blob = f"{title} {family or ''} {main_business} {require}"
                 if not self.match_keyword(blob, kw):
                     continue
             if city_key and not self.match_city(location, city_key):
                 continue
 
-            apply_url = _DETAIL_TMPL.format(job_id=job_id)
-            pub = _iso_date(r.get("releaseDate") or r.get("creationDate"))
+            advert_id = r.get("advertisementId")
+            apply_url = _DETAIL_TMPL.format(advert_id=advert_id or job_id)
 
-            # summary：拼 family / degree / 简短业务说明
+            degree = (r.get("degree") or "").strip() or None
+            education = (degree or parse_education(require)
+                         or parse_education(main_business))
+            experience = _experience(r.get("workYear")) \
+                or parse_experience(require)
+
             sum_parts: list[str] = []
             if family:
                 sum_parts.append(family)
-            if degree:
-                sum_parts.append(degree)
-            mb = (r.get("mainBusiness") or "").strip()
+            if dept:
+                sum_parts.append(dept)
+            mb = main_business.replace("\n", " ").replace("\r", " ").strip()
             if mb:
-                mb1 = mb.replace("\n", " ").replace("\r", " ")
-                if len(mb1) > 80:
-                    mb1 = mb1[:80] + "…"
-                sum_parts.append(mb1)
+                sum_parts.append(mb[:80] + ("…" if len(mb) > 80 else ""))
             summary = " · ".join(sum_parts)[:160] if sum_parts else None
 
             out.append({
@@ -153,11 +218,12 @@ class HuaweiSource(BaseSource):
                 "source": self.key,
                 "source_label": "华为",
                 "title": title,
-                "company": "华为",
+                "company": f"华为 · {dept}" if dept else "华为",
                 "location": location,
-                "education": degree,
-                "experience": None,  # API 未单独给经验字段
-                "publish_time": pub,
+                "education": education,
+                "experience": experience,
+                "publish_time": _iso_date(
+                    r.get("releaseDate") or r.get("lastUpdateDate")),
                 "apply_url": apply_url,
                 "summary": summary,
                 "fetched_at": self.now_iso(),

@@ -25,6 +25,7 @@
 
 详情 URL：https://www.iguopin.com/job/detail?id={job_id}
 """
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -177,6 +178,11 @@ class GuopingSource(BaseSource):
             nature = (it.get("nature_cn") or "").strip()
             if nature:
                 summary_parts.append(nature)
+            # 正文也放进 summary：服务端关键词二次过滤时不会把正文命中的岗位误杀
+            contents = it.get("contents") or it.get("content") or ""
+            if isinstance(contents, str) and contents.strip():
+                summary_parts.append(
+                    re.sub(r"\s+", " ", contents).strip()[:160])
             summary = " · ".join(summary_parts) if summary_parts else None
 
             apply_url = _DETAIL_URL.format(id=job_id)

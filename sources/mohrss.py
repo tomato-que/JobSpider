@@ -28,11 +28,8 @@ _BASE_LIST = (
 _PAGE1 = _BASE_LIST + "index.html"
 _PAGE_N = _BASE_LIST + "index_{n}.html"
 
-_SEARCH_URL = (
-    "https://www.mohrss.gov.cn/was5/web/search"
-    "?searchword={kw}&channelid=265899&orderby=-docreltime"
-    "&perpage=20&page={page}"
-)
+# 注：本源是公告型（bulletin=True），关键词由上层跳过硬过滤；
+# 站内搜索接口长期依赖、且对 keyword 支持不稳定，这里不做服务端搜索。
 
 _DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 

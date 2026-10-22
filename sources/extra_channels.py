@@ -55,7 +55,7 @@ _CHANNEL_SITES: list[dict] = [
     {"domain": "www.fescoadecco.com", "name": "外企德科", "cat": "国际外企"},
 ]
 
-_SITE_NAME_MAP = {s["domain"].lstrip("www."): s["name"] for s in _CHANNEL_SITES}
+_SITE_NAME_MAP = {s["domain"].removeprefix("www."): s["name"] for s in _CHANNEL_SITES}
 
 _BING_URL = "https://cn.bing.com/search?q={q}&count=20&first={first}&FORM=PERE"
 
@@ -93,7 +93,7 @@ def _parse_bing(html: str) -> list[dict]:
 
 def _domain_from_url(url: str) -> str:
     m = re.match(r"https?://([^/]+)", url)
-    return m.group(1).lstrip("www.") if m else ""
+    return m.group(1).removeprefix("www.") if m else ""
 
 
 # Bing site: 约束不可靠，结果可能包含其他站点 — 把已覆盖平台硬过滤掉

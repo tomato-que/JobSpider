@@ -9,7 +9,6 @@
 import asyncio
 import time
 from datetime import datetime
-from typing import Optional
 
 import httpx
 
@@ -19,71 +18,6 @@ from .base import BaseSource, make_id, parse_education, parse_experience
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
        "AppleWebKit/537.36 (KHTML, like Gecko) "
        "Chrome/120.0.0.0 Safari/537.36")
-
-
-# ─────────────── 字节 ───────────────
-
-_BYTE_URL = "https://jobs.bytedance.com/api/v1/search/job/posts"
-_BYTE_HEADERS = {
-    "Accept": "application/json, text/plain, */*",
-    "Content-Type": "application/json",
-    "Origin": "https://jobs.bytedance.com",
-    "Referer": "https://jobs.bytedance.com/experienced/position",
-    "User-Agent": _UA,
-}
-
-
-async def _fetch_bytedance(limit: int, keyword: str, city: str) -> list[dict]:
-    body = {
-        "keyword": keyword, "limit": min(max(limit, 10), 50), "offset": 0,
-        "portal_type": 1, "job_category_id_list": [], "tag_id_list": [],
-        "location_code_list": [], "subject_id_list": [], "recruitment_id_list": [],
-    }
-    async with httpx.AsyncClient(timeout=15.0, headers=_BYTE_HEADERS,
-                                 trust_env=False) as cli:
-        r = await cli.post(_BYTE_URL, json=body)
-        r.raise_for_status()
-        data = r.json()
-    items = (data.get("data") or {}).get("job_post_list") or []
-    out = []
-    for p in items[:limit * 2]:
-        post_id = p.get("id") or ""
-        title = p.get("title") or ""
-        apply_url = (f"https://jobs.bytedance.com/experienced/position/{post_id}/detail"
-                     if post_id else "")
-        city_info = p.get("city_info") or {}
-        loc = city_info.get("name") if isinstance(city_info, dict) else ""
-        if not loc:
-            loc = ", ".join(c.get("name", "") for c in (p.get("city_list") or [])
-                            if c.get("name"))
-        if not BaseSource.match_city(loc, city):
-            continue
-        pub = p.get("publish_time")
-        published_at = None
-        if isinstance(pub, (int, float)) and pub > 0:
-            try:
-                published_at = datetime.fromtimestamp(pub / 1000).isoformat(timespec="seconds")
-            except Exception:
-                pass
-        desc = p.get("description") or ""
-        req = p.get("requirement") or ""
-        out.append({
-            "id": make_id("company:bytedance", apply_url, post_id),
-            "source": "company:bytedance",
-            "source_label": "字节跳动",
-            "title": title,
-            "company": "字节跳动",
-            "location": loc or None,
-            "education": parse_education(req) or parse_education(desc),
-            "experience": parse_experience(req) or parse_experience(desc),
-            "publish_time": published_at,
-            "apply_url": apply_url,
-            "summary": (desc or "").replace("\n", " ").strip()[:160] or None,
-            "fetched_at": BaseSource.now_iso(),
-        })
-        if len(out) >= limit:
-            break
-    return out
 
 
 # ─────────────── 腾讯 ───────────────
@@ -238,13 +172,12 @@ class CompanyOfficialSource(BaseSource):
     display_name = "企业官网"
     category = "官方发布"
 
-    # 各子源 fetch 函数，未来加阿里/华为/美团就在这里加一行
-    # 字节跳动 (2026-05 调研)：API 现已强制要求查询参数中携带 `_signature`，
-    # 由前端 JS 动态生成，纯 httpx 无法构造，跳过。需要时用 Playwright 接入。
-    # 美团 (2026-05)：/api/web/position/list 返回 401 "未登陆"，需登录态。跳过。
-    # 百度 (2026-05)：talent.baidu.com 旧 ajax 接口 302 → /jobs/404，跳过。
+    # 各子源 fetch 函数，未来加阿里/美团就在这里加一行
+    # 字节跳动（2026-05 调研）：API 强制要求查询参数携带 `_signature`，
+    #   由前端 JS 动态生成，纯 httpx 无法构造；需要时用 Playwright 接入。
+    # 美团（2026-05）：/api/web/position/list 返回 401「未登陆」，需登录态。
+    # 百度（2026-05）：talent.baidu.com 旧 ajax 接口 302 → /jobs/404。
     _sub_sources = [
-        # ("字节跳动", _fetch_bytedance),
         ("腾讯", _fetch_tencent),
         ("网易", _fetch_netease),
     ]

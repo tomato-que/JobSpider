@@ -63,7 +63,7 @@ class SasacSource(BaseSource):
         # 用户在前端会被告知"未选岗位 / 公告源不过滤关键词"
         keyword = ""
         all_items: list[dict] = []
-        pages_to_try = 1
+        pages_to_try = 3  # 公告列表页，最多翻 3 页
         for page in range(1, pages_to_try + 1):
             url = _PAGE1 if page == 1 else _PAGE_N.format(n=page)
             html = await fetch_text(url, ttl=180.0)

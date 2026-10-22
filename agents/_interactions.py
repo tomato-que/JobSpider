@@ -6,6 +6,7 @@ import asyncio
 import json
 
 from config import gaussian_delay
+from ._apply import js_literal
 
 
 class BrowserInteractionsMixin:
@@ -99,18 +100,18 @@ class BrowserInteractionsMixin:
         await asyncio.sleep(gaussian_delay(0.5, 1.0))
 
         # 2. 在面板中找到目标城市并点击
-        safe_city = json.dumps(city)[1:-1]  # strip outer quotes
         container_js = (
-            f"document.querySelector('{container_selector}')"
+            f"document.querySelector({js_literal(container_selector)})"
             if container_selector else "document"
         )
         selected = await self.eval_js(page, f"""() => {{
+            const CITY = {js_literal(city)};
             const container = {container_js} || document;
             const candidates = container.querySelectorAll('a, li, span, div, label, dd');
             // 优先精确匹配叶子节点
             for (const el of candidates) {{
                 if (el.childElementCount === 0
-                    && el.textContent?.trim() === '{safe_city}'
+                    && el.textContent?.trim() === CITY
                     && el.offsetParent !== null) {{
                     el.click(); return true;
                 }}
@@ -118,7 +119,7 @@ class BrowserInteractionsMixin:
             // 再匹配含城市名的短元素
             for (const el of candidates) {{
                 const t = el.textContent?.trim();
-                if (t && (t === '{safe_city}' || (t.startsWith('{safe_city}') && t.length < {len(city) + 8}))
+                if (t && (t === CITY || (t.startsWith(CITY) && t.length < {len(city) + 8}))
                     && el.offsetParent !== null
                     && el.offsetHeight < 60 && el.offsetWidth > 10) {{
                     el.click(); return true;
@@ -145,8 +146,8 @@ class BrowserInteractionsMixin:
             return True
 
         # JS fallback: nativeInputValueSetter 兼容 React/Vue
-        safe_kw = keyword.replace("\\", "\\\\").replace("'", "\\'")
         filled = await self.eval_js(page, f"""() => {{
+            const KW = {js_literal(keyword)};
             const inputs = document.querySelectorAll(
                 'input[type="text"], input[type="search"], input:not([type])'
             );
@@ -161,7 +162,7 @@ class BrowserInteractionsMixin:
                     const setter = Object.getOwnPropertyDescriptor(
                         window.HTMLInputElement.prototype, 'value'
                     ).set;
-                    setter.call(el, '{safe_kw}');
+                    setter.call(el, KW);
                     el.dispatchEvent(new Event('input', {{ bubbles: true }}));
                     el.dispatchEvent(new Event('change', {{ bubbles: true }}));
                     return true;
@@ -206,7 +207,44 @@ class BrowserInteractionsMixin:
     # ──────── 通用交互：翻页 ────────
 
     async def click_next_page(self, page) -> bool:
-        """点击下一页按钮"""
+        """点击下一页：优先真实鼠标，失败再回退 JS click。"""
+        find_js = """() => {
+            const sels = [
+                '.next:not(.disabled)', '.page-next:not(.disabled)',
+                '[class*="next"]:not(.disabled)', '.btn-next:not(.disabled)',
+                '.ant-pagination-next:not(.ant-pagination-disabled)',
+            ];
+            let btn = null;
+            for (const sel of sels) {
+                for (const el of document.querySelectorAll(sel)) {
+                    if (el.offsetParent !== null
+                        && !el.classList.contains('disabled')
+                        && !el.getAttribute('aria-disabled')) {
+                        btn = el; break;
+                    }
+                }
+                if (btn) break;
+            }
+            if (!btn) {
+                for (const el of document.querySelectorAll('a, button, li, span')) {
+                    const t = (el.textContent || '').trim();
+                    if ((t === '下一页' || t === '>' || t === '›' || t === '»')
+                        && el.offsetParent !== null
+                        && !el.classList.contains('disabled')) {
+                        btn = el; break;
+                    }
+                }
+            }
+            if (!btn) return {found: false};
+            btn.scrollIntoView({behavior: 'instant', block: 'center'});
+            const r = btn.getBoundingClientRect();
+            return {found: true, x: r.left, y: r.top, w: r.width, h: r.height,
+                    text: (btn.textContent || '').trim().slice(0, 10)};
+        }"""
+        res = await self.human_click(page, find_js, before_click_pause=(0.15, 0.35))
+        if res.get("clicked"):
+            return True
+
         result = await self.eval_js(page, """() => {
             // 策略1: 常见下一页按钮 class
             const nexts = document.querySelectorAll(

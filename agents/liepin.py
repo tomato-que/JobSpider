@@ -11,8 +11,9 @@ import asyncio
 import hashlib
 import json
 
-from models.job import SearchParams, JobInfo
+from models.job import SearchParams, JobInfo, ApplyOutcome
 from agents.base import BaseAgent
+from agents._apply import js_literal
 from config import gaussian_delay
 
 
@@ -38,7 +39,7 @@ class LiepinAgent(BaseAgent):
 
     def __init__(self):
         super().__init__("liepin")
-        self._pending_detail_page = None
+        self._pending_detail_pages = {}
 
     async def _check_login_wall(self, page) -> bool:
         return bool(await self.eval_js(page, """() => {
@@ -50,46 +51,17 @@ class LiepinAgent(BaseAgent):
         }"""))
 
     async def _check_anti_bot(self, page) -> bool:
-        try:
-            url = await self.engine.current_url(page)
-            if any(k in (url or "").lower() for k in ("captcha", "verify", "safety")):
-                self.log(f"  [猎聘] 🚨 anti-bot URL detected: {url[:80]}")
-                return True
-            hit = await self.eval_js(page, """() => {
-                const sel = [
-                    '.geetest_panel', '.geetest_holder', '.geetest_box',
-                    '.verify-modal', '.captcha-popup', '.captcha-box',
-                    '[class*="captcha"]',
-                    '.login-modal.show', '.login-pop.show', '.com-login.show',
-                ];
-                for (const s of sel) {
-                    const el = document.querySelector(s);
-                    if (el && el.offsetParent !== null
-                        && el.offsetWidth > 50 && el.offsetHeight > 50) {
-                        return el.className || s;
-                    }
-                }
-                const body = (document.body?.innerText || '').slice(0, 4000);
-                if (/请完成.{0,4}验证|滑动.{0,4}验证|安全验证|系统检测到|访问过于频繁/.test(body))
-                    return 'text_match';
-                return '';
-            }""")
-            if hit:
-                self.log(f"  [猎聘] 🚨 anti-bot DOM: {hit}")
-                return True
-        except Exception as e:
-            print(f"  [猎聘 anti-bot check] {e}", flush=True)
-        return False
+        return await super()._check_anti_bot(page)
 
     async def _select_city(self, page, city: str) -> bool:
         """猎聘城市选择：点击搜索页上方的城市链接（全国/北京/上海...）"""
-        safe_city = city.replace("'", "\\'")
         selected = await self.eval_js(page, f"""() => {{
+            const CITY = {js_literal(city)};
             // 猎聘城市链接在搜索页上方，与"城市"标签在同一行
             const links = document.querySelectorAll('a');
             for (const a of links) {{
                 const t = a.textContent?.trim();
-                if (t === '{safe_city}' && a.offsetParent !== null
+                if (t === CITY && a.offsetParent !== null
                     && a.offsetHeight > 5 && a.offsetHeight < 50) {{
                     a.click();
                     return true;
@@ -191,7 +163,24 @@ class LiepinAgent(BaseAgent):
         return page
 
     async def _click_next(self, page) -> bool:
-        """猎聘翻页：.ant-pagination-next"""
+        """猎聘翻页：.ant-pagination-next，优先真实鼠标。"""
+        find_js = """() => {
+            const next = document.querySelector(
+                '.ant-pagination-next:not(.ant-pagination-disabled)'
+            );
+            if (next && next.offsetParent !== null) {
+                const target = next.querySelector('button, a') || next;
+                target.scrollIntoView({behavior: 'instant', block: 'center'});
+                const r = target.getBoundingClientRect();
+                return {found: true, x: r.left, y: r.top,
+                        w: r.width, h: r.height, text: 'next'};
+            }
+            return {found: false};
+        }"""
+        res = await self.human_click(page, find_js,
+                                      before_click_pause=(0.15, 0.35))
+        if res.get("clicked"):
+            return True
         result = await self.eval_js(page, """() => {
             const next = document.querySelector(
                 '.ant-pagination-next:not(.ant-pagination-disabled)'
@@ -205,22 +194,39 @@ class LiepinAgent(BaseAgent):
         return bool(result)
 
     async def _fetch_jd_text(self, job: JobInfo) -> str:
-        """Override: 保留详情页供 apply_to_job 复用，避免重复打开。"""
-        if self._pending_detail_page:
-            try:
-                await self._pending_detail_page.close()
-            except Exception:
-                pass
-            self._pending_detail_page = None
-
+        """Override: 保留详情页供 apply_to_job 复用，按 job_id 键控。"""
         if not job.job_url:
             return ""
+        key = job.job_id or job.job_url
+
+        page = self._pending_detail_pages.pop(key, None)
+        if page is not None:
+            try:
+                cur = page.url or ""
+                if job.job_url not in cur and cur not in job.job_url:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+                    page = None
+            except Exception:
+                page = None
+        if page is None:
+            try:
+                page = await self.fetch_page(job.job_url, network_idle=True)
+            except Exception as e:
+                print(f"  [猎聘] 获取JD失败: {e}", flush=True)
+                return ""
+
         try:
-            self._pending_detail_page = await self.fetch_page(
-                job.job_url, network_idle=True,
-            )
-            await asyncio.sleep(gaussian_delay(1.0, 2.0))
-            jd_text = await self.eval_js(self._pending_detail_page, """() => {
+            try:
+                await page.wait_for_selector(
+                    '.job-intro-container, .job-description, .job-sec-text, '
+                    '.job-detail__content, .job_msg, [class*="job-desc"]',
+                    timeout=5000, state="attached")
+            except Exception:
+                pass
+            jd_text = await self.eval_js(page, """() => {
                 const sels = [
                     '.job-sec-text', '.job-detail__content', '.job_msg',
                     '.bmsg', '.describtion', '.job-intro-container',
@@ -239,33 +245,60 @@ class LiepinAgent(BaseAgent):
             }""")
             if jd_text:
                 print(f"  [猎聘] 获取JD: {len(jd_text)}字", flush=True)
+            self._pending_detail_pages[key] = page
             return jd_text or ""
         except Exception as e:
             print(f"  [猎聘] 获取JD失败: {e}", flush=True)
-            if self._pending_detail_page:
-                try:
-                    await self._pending_detail_page.close()
-                except Exception:
-                    pass
-                self._pending_detail_page = None
+            try:
+                await page.close()
+            except Exception:
+                pass
             return ""
 
-    async def apply_to_job(self, page, job, greeting, params) -> bool:
+    async def _cleanup_after_scrape(self):
+        pages = list(self._pending_detail_pages.values())
+        self._pending_detail_pages.clear()
+        for p in pages:
+            try:
+                await p.close()
+            except Exception:
+                pass
+
+    async def apply_to_job(self, page, job, greeting, params) -> ApplyOutcome:
         """猎聘: 打开详情页 → 点击 a.btn-chat → 填写打招呼语 → 发送
 
         搜索结果页的"聊一聊"需要 hover 触发且不可靠。
         详情页有始终可见的 a.btn-chat 按钮（section.recruiter-container 内）。
         """
         if not job.job_url:
+            self._apply_detail = "[环境] 无 job_url"
             print(f"  [猎聘] apply 失败: 无 job_url", flush=True)
-            return False
+            return ApplyOutcome.FAILED
 
-        detail_page = self._pending_detail_page
-        self._pending_detail_page = None
+        key = job.job_id or job.job_url
+        detail_page = self._pending_detail_pages.pop(key, None)
+        if detail_page is not None:
+            try:
+                cur = detail_page.url or ""
+                if job.job_url not in cur and cur not in job.job_url:
+                    try:
+                        await detail_page.close()
+                    except Exception:
+                        pass
+                    detail_page = None
+            except Exception:
+                detail_page = None
+
         try:
-            if not detail_page:
+            if detail_page is None:
                 detail_page = await self.fetch_page(job.job_url, network_idle=True)
-                await asyncio.sleep(gaussian_delay(1.0, 2.0))
+
+            chat_sel = 'a.btn-chat, [data-selector="chat-chat"]'
+            try:
+                await detail_page.wait_for_selector(chat_sel, timeout=5000,
+                                                    state="visible")
+            except Exception:
+                pass
 
             # Step 1: 找到并点击 a.btn-chat
             chat_btn_js = """() => {
@@ -304,34 +337,56 @@ class LiepinAgent(BaseAgent):
             result = await self.human_click(detail_page, chat_btn_js)
             if not result.get("clicked"):
                 reason = result.get("reason", "unknown")
+                already = await self.eval_js(detail_page, """() => {
+                    const t = document.body ? document.body.textContent : '';
+                    return t.includes('已沟通') || t.includes('已投递');
+                }""")
+                if already:
+                    return ApplyOutcome.ALREADY
+                self._apply_detail = f"[环境] 详情页未找到聊一聊({reason})"
                 print(f"  [猎聘] 详情页未找到聊一聊: {reason}", flush=True)
-                return False
+                return ApplyOutcome.FAILED
 
             print(f"  [猎聘] 点击了: '{result.get('text', '')}'", flush=True)
-            await asyncio.sleep(gaussian_delay(2.0, 3.0))
+
+            try:
+                await detail_page.wait_for_selector(
+                    '.ant-modal, .ant-drawer, textarea, [contenteditable="true"]',
+                    timeout=4000, state="visible")
+            except Exception:
+                pass
+
+            if await self._check_anti_bot(detail_page):
+                return ApplyOutcome.BLOCKED
 
             # Step 2: 检测点击后状态
             post_state = await self.eval_js(detail_page, """() => {
                 const modals = document.querySelectorAll(
-                    '.ant-modal, .ant-drawer, [class*="modal"], [class*="dialog"], [class*="greet"]'
+                    '.ant-modal, .ant-drawer, [class*="modal"], '
+                    + '[class*="dialog"], [class*="greet"]'
                 );
                 for (const m of modals) {
-                    if (m.offsetParent !== null && m.getBoundingClientRect().height > 50) {
-                        const ta = m.querySelector('textarea, [contenteditable="true"], input[type="text"]');
+                    if (m.offsetParent !== null
+                        && m.getBoundingClientRect().height > 50) {
+                        const ta = m.querySelector(
+                            'textarea, [contenteditable="true"], input[type="text"]');
                         return { state: 'modal', hasInput: !!ta };
                     }
                 }
-                const tas = document.querySelectorAll('textarea, [contenteditable="true"]');
+                const tas = document.querySelectorAll(
+                    'textarea, [contenteditable="true"]');
                 for (const ta of tas) {
-                    if (ta.offsetParent !== null && ta.getBoundingClientRect().height > 20) {
+                    if (ta.offsetParent !== null
+                        && ta.getBoundingClientRect().height > 20) {
                         return { state: 'input_visible' };
                     }
                 }
-                if (location.href.includes('im.liepin') || location.href.includes('/im/')
+                if (location.href.includes('im.liepin')
+                    || location.href.includes('/im/')
                     || location.href.includes('/chat')) {
                     return { state: 'im_page', url: location.href };
                 }
-                const body = document.body?.textContent || '';
+                const body = document.body ? document.body.textContent : '';
                 if (body.includes('已沟通') || body.includes('已投递')) {
                     return { state: 'already_applied' };
                 }
@@ -342,13 +397,13 @@ class LiepinAgent(BaseAgent):
             print(f"  [猎聘] 点击后状态: {state}", flush=True)
 
             if state == 'already_applied':
-                return True
+                return ApplyOutcome.ALREADY
 
             # Step 3: 填写打招呼语
             filled = False
             if greeting:
-                safe_greeting = json.dumps(greeting)[1:-1]  # strip outer quotes
                 filled = await self.eval_js(detail_page, f"""() => {{
+                    const GREETING = {js_literal(greeting)};
                     const sels = [
                         '.ant-modal textarea', '.ant-drawer textarea',
                         '.greet-textarea', 'textarea[placeholder*="打招呼"]',
@@ -365,14 +420,14 @@ class LiepinAgent(BaseAgent):
                             const setter = Object.getOwnPropertyDescriptor(
                                 window.HTMLTextAreaElement.prototype, 'value'
                             ).set;
-                            setter.call(ta, '{safe_greeting}');
+                            setter.call(ta, GREETING);
                         }} else if (ta.tagName === 'INPUT') {{
                             const setter = Object.getOwnPropertyDescriptor(
                                 window.HTMLInputElement.prototype, 'value'
                             ).set;
-                            setter.call(ta, '{safe_greeting}');
+                            setter.call(ta, GREETING);
                         }} else {{
-                            ta.textContent = '{safe_greeting}';
+                            ta.textContent = GREETING;
                         }}
                         ta.dispatchEvent(new Event('input', {{ bubbles: true }}));
                         ta.dispatchEvent(new Event('change', {{ bubbles: true }}));
@@ -382,22 +437,39 @@ class LiepinAgent(BaseAgent):
                 }}""")
                 if filled:
                     print(f"  [猎聘] 已填写打招呼语", flush=True)
-                await asyncio.sleep(gaussian_delay(0.5, 1.0))
+                await asyncio.sleep(gaussian_delay(0.4, 0.8))
 
-            # Step 4: 点击发送/确认
-            confirm_find = self.build_modal_button_finder(
-                button_selectors=(
-                    '.ant-modal .ant-btn-primary, .ant-drawer .ant-btn-primary, '
-                    '.dialog-confirm, .btn-primary, .submit-btn, '
-                    '.send-btn, .btn-send, [class*="send"], [class*="submit"]'
-                ),
-                button_texts=['发送', '确认', '确定', '提交', '立即沟通', '开始沟通'],
-            )
-            confirm_result = await self.human_click(detail_page, confirm_find)
-            confirmed = confirm_result.get("text") if confirm_result.get("clicked") else None
-            if confirmed:
-                print(f"  [猎聘] 已发送: '{confirmed}'", flush=True)
-            await asyncio.sleep(gaussian_delay(0.8, 1.2))
+            draft = (getattr(params, "apply_mode", "auto") or "auto").lower() == "draft"
+            if draft and filled:
+                self._apply_detail = "草稿未发送"
+                outcome = ApplyOutcome.UNCERTAIN
+            else:
+                # Step 4: 点击发送/确认
+                confirm_find = self.build_modal_button_finder(
+                    button_selectors=(
+                        '.ant-modal .ant-btn-primary, .ant-drawer .ant-btn-primary, '
+                        '.dialog-confirm, .btn-primary, .submit-btn, '
+                        '.send-btn, .btn-send, [class*="send"], [class*="submit"]'
+                    ),
+                    button_texts=['发送', '确认', '确定', '提交', '立即沟通',
+                                  '开始沟通'],
+                )
+                confirm_result = await self.human_click(detail_page, confirm_find)
+                confirmed = (confirm_result.get("text")
+                             if confirm_result.get("clicked") else None)
+                if confirmed:
+                    print(f"  [猎聘] 已发送: '{confirmed}'", flush=True)
+                    outcome = ApplyOutcome.SUCCESS
+                elif filled:
+                    self._apply_detail = "已填写但未点到发送按钮"
+                    outcome = ApplyOutcome.UNCERTAIN
+                elif state in ('im_page', 'input_visible', 'modal'):
+                    self._apply_detail = "已打开聊天但未找到输入框"
+                    outcome = ApplyOutcome.UNCERTAIN
+                else:
+                    self._apply_detail = "[状态] 点击后无聊天入口"
+                    outcome = ApplyOutcome.FAILED
+            await asyncio.sleep(gaussian_delay(0.5, 0.9))
 
             # 关闭弹窗
             await self.eval_js(detail_page, """() => {
@@ -407,11 +479,12 @@ class LiepinAgent(BaseAgent):
                 if (close) close.click();
             }""")
             await asyncio.sleep(gaussian_delay(0.3, 0.5))
-            return bool(confirmed) or bool(filled)
+            return outcome
 
         except Exception as e:
             print(f"  [猎聘] apply 异常: {e}", flush=True)
-            return False
+            self._apply_detail = f"[环境] {e}"
+            return ApplyOutcome.FAILED
         finally:
             if detail_page:
                 try:
@@ -438,7 +511,6 @@ class LiepinAgent(BaseAgent):
                     └─ DIV.ellipsis-1            → HR姓名
         """
         try:
-            await asyncio.sleep(1)
             jobs_data = await self.eval_js(page, """() => {
                 const cards = document.querySelectorAll('.job-card-pc-container');
                 if (!cards.length) {

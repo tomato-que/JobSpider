@@ -15,6 +15,8 @@ from .websearch import WebSearchSource
 from .talent_regional import RegionalTalentSource
 from .shixiseng import ShixisengSource
 from .extra_channels import ExtraChannelSource
+from .jd import JdSource
+from .didi import DidiSource
 
 
 # 顺序即 UI 上的展示顺序
@@ -30,6 +32,8 @@ _SOURCE_CLASSES: list[type[BaseSource]] = [
     RegionalTalentSource,
     ShixisengSource,
     ExtraChannelSource,
+    JdSource,
+    DidiSource,
     WebSearchSource,
 ]
 

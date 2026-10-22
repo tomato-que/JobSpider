@@ -110,7 +110,11 @@ async def _fetch_gdrc(limit: int, keyword: str, city: str) -> list[dict]:
         welfare = [w.get_text(strip=True) for w in welfare_els]
         education = next((w for w in welfare
                           if w in ("博士", "硕士", "本科", "大专", "学历不限")), None)
-        experience = next((w for w in welfare if w != education), None)
+        experience = next(
+            (w for w in welfare
+             if re.search(r"\d+\s*[-~至到]\s*\d+\s*年|\d+\s*年|应届|经验", w)),
+            None,
+        )
 
         cn_el = a.select_one("div.companyName")
         company = cn_el.get_text(strip=True) if cn_el else "未公开"
@@ -184,7 +188,7 @@ def _parse_bing_results(html: str) -> list[dict]:
 
 def _domain_from_url(url: str) -> str:
     m = re.match(r"https?://([^/]+)", url)
-    return m.group(1).lstrip("www.") if m else ""
+    return m.group(1).removeprefix("www.") if m else ""
 
 
 async def _bing_site_search(
@@ -204,7 +208,7 @@ async def _bing_site_search(
         return []
 
     results = _parse_bing_results(html)
-    site_name_map = {s["domain"].lstrip("www."): s["name"] for s in _SITES}
+    site_name_map = {s["domain"].removeprefix("www."): s["name"] for s in _SITES}
 
     out: list[dict] = []
     seen: set[str] = set()
@@ -226,7 +230,8 @@ async def _bing_site_search(
             "source_label": label,
             "title": r["title"],
             "company": label,
-            "location": city.strip() or None,
+            # 不硬填 location：Bing 结果没有可靠的城市字段
+            "location": None,
             "education": None,
             "experience": None,
             "publish_time": None,
@@ -264,9 +269,17 @@ class RegionalTalentSource(BaseSource):
                         if city_key in s["city"]]
             rest = [d for d in other_domains if d not in priority]
             other_domains = priority + rest
-        tasks.append(
-            _bing_site_search(other_domains[:8], kw, city, limit)
-        )
+        async def _bing_batches():
+            """site: 查询每批最多 3 个域名，串行 + 间隔，避免 Bing 忽略 site:。"""
+            out: list[dict] = []
+            picked = other_domains[:9]
+            for i in range(0, len(picked), 3):
+                out.extend(await _bing_site_search(
+                    picked[i:i + 3], kw, city, limit))
+                await asyncio.sleep(1.0)
+            return out
+
+        tasks.append(_bing_batches())
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
         merged: list[dict] = []

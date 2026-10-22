@@ -1784,7 +1784,7 @@
             <div id="kwMode" style="display:none">
               <div class="field">
                 <label class="field-hint">关键词</label>
-                <input class="input" id="kw" placeholder="Python开发 · 前端工程师...">
+                <input class="input" id="kw" placeholder="Python开发, 前端工程师（逗号分隔多个）">
               </div>
             </div>
 
@@ -1874,8 +1874,8 @@
               <div class="rate-group">
                 <label class="rate-opt"><input type="radio" name="applyRate" value="slow"><span>🐢 慢<em>8-15s</em></span></label>
                 <label class="rate-opt"><input type="radio" name="applyRate" value="normal" checked><span>🚶 标准<em>4-8s</em></span></label>
-                <label class="rate-opt"><input type="radio" name="applyRate" value="fast"><span>🏃 快<em>2-4s</em></span></label>
-                <label class="rate-opt"><input type="radio" name="applyRate" value="turbo"><span>⚡ 极速<em>1-2s</em></span></label>
+                <label class="rate-opt"><input type="radio" name="applyRate" value="fast"><span>🏃 快<em>3-5s</em></span></label>
+                <label class="rate-opt"><input type="radio" name="applyRate" value="turbo"><span>⚡ 极速<em>3-4s</em></span></label>
               </div>
               <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.4">
                 速率越快越容易触发风控；建议首次投递选"标准"或"慢"
@@ -1953,6 +1953,14 @@
               <label style="display:flex;align-items:center;gap:8px;margin-top:8px;
                             padding:8px 10px;background:var(--bg-surface);border-radius:var(--radius-xs);
                             border:1px solid var(--border-subtle);cursor:pointer;font-size:13px"
+                     title="只把招呼语填进输入框，不点发送；结果记「待确认」，不占配额、不重投。51job 无聊天框，等价于不点击投递。">
+                <input type="checkbox" id="draftMode" style="margin:0">
+                <span>✍️ 只填不发 <span style="color:var(--text-muted);font-size:12px">草稿模式，人工确认后自己发</span></span>
+              </label>
+
+              <label style="display:flex;align-items:center;gap:8px;margin-top:8px;
+                            padding:8px 10px;background:var(--bg-surface);border-radius:var(--radius-xs);
+                            border:1px solid var(--border-subtle);cursor:pointer;font-size:13px"
                      title="开启后，过去 7 天内已真投过的同一岗位会被跳过，避免对同一 HR 重复打招呼。预演 / 跳过 / 失败的不算。">
                 <input type="checkbox" id="skipApplied" checked style="margin:0">
                 <span>🛡 跳过 7 天内已真投过的岗位 <span style="color:var(--text-muted);font-size:12px">(防重复打扰 HR · 推荐保持开启)</span></span>
@@ -2008,6 +2016,40 @@
               </button>
               <span id="cfgSaved" style="display:none;font-size:11px;color:var(--green);margin-top:8px;
                     text-align:center;font-family:var(--font-mono)">已保存 ✓</span>
+            </div>
+
+            <hr style="border:none;border-top:1px solid var(--border-subtle);margin:18px 0 14px">
+
+            <div class="field">
+              <label class="field-hint">
+                简历 <span style="font-weight:400;color:var(--text-muted)">(用于生成个性化招呼语)</span>
+              </label>
+              <input class="input" type="file" id="resumeFile"
+                     accept=".pdf,.docx,.txt,.md"
+                     style="font-size:12px;padding:7px 9px">
+              <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+                <button class="btn btn-primary btn-sm" id="btnResumeUpload"
+                        onclick="uploadResume()">上传并解析</button>
+                <button class="btn btn-ghost btn-sm" id="btnResumeReparse"
+                        onclick="reparseResume()">重新解析</button>
+                <button class="btn btn-ghost btn-sm" id="btnResumeDelete"
+                        onclick="deleteResume()">删除</button>
+              </div>
+              <div id="resumeStatus"
+                   style="font-size:11.5px;color:var(--text-muted);margin-top:8px;line-height:1.5">
+                未上传简历 — 上传后 LLM 会结合 JD + 简历生成招呼语
+              </div>
+              <textarea class="input" id="resumeProfile" rows="8"
+                        placeholder="上传后显示解析摘要，可手动修改"
+                        style="margin-top:8px;resize:vertical;min-height:120px;font-size:12.5px;line-height:1.5"
+                        disabled></textarea>
+              <button class="btn btn-ghost btn-sm" id="btnResumeSave"
+                      onclick="saveResumeProfile()"
+                      style="margin-top:6px;width:100%" disabled>保存摘要</button>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.5">
+                仅保存在本机 <code>data/resume.json</code>；解析和生成招呼语时会发送给当前 LLM。
+                手机号 / 邮箱 / 证件号会自动打码。扫描版 PDF 请另存为文本型 PDF 或 DOCX。
+              </div>
             </div>
           </div>
 
@@ -2406,7 +2448,7 @@ function setProg(key, count, st) {
   pc.dataset.status = st;
   const badge = pc.querySelector('.pl-tile-badge') || pc.querySelector('.pc-badge');
   const cnt = pc.querySelector('.pl-tile-count') || pc.querySelector('.pc-count');
-  if (badge) badge.textContent = {waiting:'等待',running:'投递中',done:'完成',error:'失败'}[st]||st;
+  if (badge) badge.textContent = {waiting:'等待',running:'投递中',done:'完成',error:'失败',blocked:'风控暂停'}[st]||st;
   if (cnt) cnt.textContent = count;
 }
 
@@ -2416,6 +2458,7 @@ function switchTab(name) {
   qa('.sb-pane').forEach(p => p.classList.toggle('active', p.dataset.pane === name));
   const panel = document.querySelector('.sb-panel');
   if (panel) panel.dataset.active = name;
+  if (name === 'llm') loadResume();
 }
 
 // ========== HISTORY (dropdown in results head) ==========
@@ -2902,9 +2945,11 @@ async function go() {
       return toast('请至少选择一个岗位', 'err');
     }
   } else {
-    const kw = q('#kw').value.trim();
-    if (!kw) return toast('请输入职位关键词', 'err'), q('#kw').focus();
-    keywords = [kw];
+    const kwRaw = q('#kw').value.trim();
+    if (!kwRaw) return toast('请输入职位关键词', 'err'), q('#kw').focus();
+    // 逗号/顿号分隔多个关键词；保留词内空格（如「Python 开发」）
+    keywords = kwRaw.split(/[,，、]+/).map(s => s.trim()).filter(Boolean);
+    if (!keywords.length) return toast('请输入职位关键词', 'err'), q('#kw').focus();
   }
 
   const btn = q('#btnGo'); btn.disabled = true;
@@ -2975,6 +3020,7 @@ async function go() {
   payload.burst_pause_minutes = (Number.isFinite(burstLo) && Number.isFinite(burstHi)) ? [burstLo, burstHi] : null;
   payload.max_per_company_per_day = Number.isFinite(maxPerCo) ? maxPerCo : null;
   payload.dry_run = dryRunVal;
+  payload.apply_mode = document.getElementById('draftMode')?.checked ? 'draft' : 'auto';
   payload.skip_applied = document.getElementById('skipApplied')?.checked !== false;
 
   if (!body.platforms.length) {
@@ -3113,10 +3159,12 @@ async function loadSummary(tid) {
     const d = await r.json();
     if (!d || !d.ok) { panel.style.display = 'none'; return; }
     const applied = d.applied || 0, dryRun = d.dry_run || 0;
+    const uncertain = d.uncertain || 0;
     const skipped = d.skipped || 0, failed = d.failed || 0, total = d.total || 0;
     const headParts = [];
     if (dryRun > 0) headParts.push(`预演 ${dryRun}`);
     if (applied > 0 || dryRun === 0) headParts.push(`投递 ${applied}`);
+    if (uncertain > 0) headParts.push(`待确认 ${uncertain}`);
     headParts.push(`跳过 ${skipped}`, `失败 ${failed}`);
     const head = `${headParts.join(' · ')}（共 ${total}）`;
 
@@ -3271,6 +3319,10 @@ function _buildStatusCell(j) {
     const reason = j.apply_skip_reason ? ` title="${esc(j.apply_skip_reason)}"` : '';
     return `<span style="color:var(--red);font-size:12px"${reason}>✗ 失败${j.apply_skip_reason?' ⓘ':''}</span>`;
   }
+  if (j.apply_status === 'uncertain') {
+    const reason = j.apply_skip_reason ? ` title="${esc(j.apply_skip_reason)}"` : '';
+    return `<span style="color:#e0a050;font-size:12px"${reason}>⚠ 待确认${j.apply_skip_reason?' ⓘ':''}</span>`;
+  }
   if (j.apply_status === 'login_required') {
     return `<span style="color:#e0a050;font-size:12px">⚠ 需登录</span>`;
   }
@@ -3288,6 +3340,9 @@ function _buildDetailCell(j) {
   }
   if (j.apply_status === 'failed' && j.apply_skip_reason) {
     return `<span class="td-detail td-fail">${esc(j.apply_skip_reason)}</span>`;
+  }
+  if (j.apply_status === 'uncertain' && j.apply_skip_reason) {
+    return `<span class="td-detail" style="color:#e0a050">${esc(j.apply_skip_reason)}</span>`;
   }
   return '<span class="td-detail">—</span>';
 }
@@ -3457,8 +3512,146 @@ async function loadConfigFromServer() {
   } catch {}
 }
 
+// ========== 简历（LLM 页） ==========
+const RESUME_SOURCE_LABEL = {
+  llm: 'LLM 解析',
+  fallback: '原文摘录',
+  manual: '手动编辑',
+};
+
+function _resumeSetButtons(has) {
+  ['#btnResumeReparse', '#btnResumeDelete', '#btnResumeSave'].forEach(sel => {
+    const b = q(sel);
+    if (b) b.disabled = !has;
+  });
+  const ta = q('#resumeProfile');
+  if (ta) ta.disabled = !has;
+}
+
+async function loadResume() {
+  const status = q('#resumeStatus');
+  const ta = q('#resumeProfile');
+  if (!status || !ta) return;
+  try {
+    const r = await fetch('/api/resume');
+    const d = await r.json();
+    if (!d.exists) {
+      status.textContent = '未上传简历 — 上传后 LLM 会结合 JD + 简历生成招呼语';
+      status.style.color = 'var(--text-muted)';
+      ta.value = '';
+      _resumeSetButtons(false);
+      return;
+    }
+    ta.value = d.profile_text || '';
+    const src = RESUME_SOURCE_LABEL[d.profile_source] || d.profile_source || '未知';
+    const when = (d.uploaded_at || '').replace('T', ' ');
+    status.textContent = `${d.filename || '简历'} · ${d.chars || 0} 字 · ${src}`
+      + (when ? ` · 上传于 ${when}` : '');
+    status.style.color = 'var(--text-body)';
+    _resumeSetButtons(true);
+  } catch (e) {
+    status.textContent = '读取简历状态失败：' + e.message;
+    status.style.color = 'var(--red, #d9534f)';
+  }
+}
+
+async function uploadResume() {
+  const input = q('#resumeFile');
+  const f = input?.files?.[0];
+  if (!f) return toast('请先选择简历文件', 'warn');
+  const btn = q('#btnResumeUpload');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '解析中…';
+  try {
+    const fd = new FormData();
+    fd.append('file', f);
+    const r = await fetch('/api/resume', { method: 'POST', body: fd });
+    let d = {};
+    try { d = await r.json(); } catch {}
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    if (d.warning) toast(d.warning, 'warn', 8000);
+    else toast('简历已解析，可检查摘要后保存', 'ok');
+    input.value = '';
+    await loadResume();
+  } catch (e) {
+    toast('简历上传失败：' + e.message, 'err', 8000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function reparseResume() {
+  const btn = q('#btnResumeReparse');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '解析中…';
+  try {
+    const r = await fetch('/api/resume/reparse', { method: 'POST' });
+    let d = {};
+    try { d = await r.json(); } catch {}
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    if (!d.ok) {
+      toast(d.warning || '重新解析失败', 'warn', 8000);
+      return;
+    }
+    toast('已重新解析简历', 'ok');
+    await loadResume();
+  } catch (e) {
+    toast('重新解析失败：' + e.message, 'err', 8000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function saveResumeProfile() {
+  const ta = q('#resumeProfile');
+  const text = (ta?.value || '').trim();
+  if (!text) return toast('简历摘要不能为空', 'warn');
+  const btn = q('#btnResumeSave');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+  try {
+    const r = await fetch('/api/resume/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile_text: text }),
+    });
+    let d = {};
+    try { d = await r.json(); } catch {}
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    toast('简历摘要已保存', 'ok');
+    await loadResume();
+  } catch (e) {
+    toast('保存摘要失败：' + e.message, 'err', 8000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function deleteResume() {
+  if (!confirm('确定删除本机保存的简历摘要？删除后招呼语会恢复为不包含简历信息。')) {
+    return;
+  }
+  try {
+    const r = await fetch('/api/resume', { method: 'DELETE' });
+    let d = {};
+    try { d = await r.json(); } catch {}
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+    toast('已删除简历', 'ok');
+    await loadResume();
+  } catch (e) {
+    toast('删除简历失败：' + e.message, 'err', 8000);
+  }
+}
+
 initTheme();
 loadConfigFromServer();
+loadResume();
 loadIndustries();
 loadCities();
 loadHistory();
@@ -4508,9 +4701,6 @@ async function refreshPublicJobs() {
     if (pjEnabled.size) params.set('sources', [...pjEnabled].join(','));
     // 每源单次抓 ~40 条，6 源合计上限 ~240；多次点击「抓取」会追加合并，不会重置
     params.set('limit_per_source', '40');
-    // ✨ LLM 富化开关：关闭后服务端跳过 enrich，省 token
-    const enrichOn = !!q('#pjEnrichToggle')?.checked;
-    params.set('enrich', enrichOn ? 'true' : 'false');
 
     // 没关键词时不再用 confirm 阻塞（首屏自动加载会被卡住）
     // 改为在完成后的 toast 里提示用户"未选岗位 → 结果可能不准"

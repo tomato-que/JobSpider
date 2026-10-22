@@ -65,6 +65,7 @@ class JdSource(BaseSource):
     key = "jd"
     display_name = "京东招聘"
     category = "企业官网"
+    enabled = False  # 接口未经长期验证，默认关闭，UI 可手动开启
 
     async def fetch(self, limit: int = 20,
                     keyword: str = "", city: str = "") -> list[dict]:

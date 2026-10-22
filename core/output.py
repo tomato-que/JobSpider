@@ -1,11 +1,23 @@
 """输出模块 - 格式化结果并保存"""
-import json
 import csv
+import io
+import json
+import os
 from datetime import datetime
 from pathlib import Path
 
 from models.job import JobInfo, ScrapeResult
 from config import OUTPUT_DIR
+
+
+def _atomic_write(path: Path, text: str, encoding: str = "utf-8"):
+    """先写 .tmp、fsync，再 os.replace，避免中断留下半截文件。"""
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding=encoding, newline="") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
 
 
 def save_results_json(results: list[ScrapeResult], all_jobs: list[JobInfo],
@@ -26,8 +38,11 @@ def save_results_json(results: list[ScrapeResult], all_jobs: list[JobInfo],
         "jobs": [j.to_dict() for j in all_jobs],
     }
 
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=2)
+    _atomic_write(
+        filename,
+        json.dumps(output, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
     return filename
 
@@ -38,10 +53,6 @@ def save_results_csv(all_jobs: list[JobInfo], output_dir: Path = OUTPUT_DIR) -> 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = output_dir / f"jobs_{timestamp}.csv"
 
-    if not all_jobs:
-        filename.touch()
-        return filename
-
     # 主要字段
     fieldnames = [
         "job_title", "company_name", "salary_range", "salary_min", "salary_max",
@@ -51,13 +62,14 @@ def save_results_csv(all_jobs: list[JobInfo], output_dir: Path = OUTPUT_DIR) -> 
         "apply_skip_reason", "scrape_time",
     ]
 
-    with open(filename, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-        writer.writeheader()
-        for job in all_jobs:
-            row = job.to_dict()
-            row["benefits"] = "|".join(job.benefits)
-            writer.writerow(row)
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+    writer.writeheader()
+    for job in all_jobs:
+        row = job.to_dict()
+        row["benefits"] = "|".join(job.benefits)
+        writer.writerow(row)
+    _atomic_write(filename, buf.getvalue(), encoding="utf-8-sig")
 
     return filename
 

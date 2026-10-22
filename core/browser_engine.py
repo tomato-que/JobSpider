@@ -9,26 +9,37 @@ from typing import Optional
 
 from config import HEADLESS, PAGE_LOAD_TIMEOUT, ROOT_DIR, gaussian_delay
 from core.log import get_logger
+from core.pw_compat import (
+    async_playwright, engine_name, stock_async_playwright,
+)
 
 log = get_logger("browser_engine")
 
 
+# 只保留最小、且不会与真实 Chrome 指纹冲突的修补：
+# - navigator.webdriver（AutomationControlled 之外的双保险）
+# - notifications 权限查询（老牌检测项）
+# plugins / languages / UA 不再伪造：真实 Chrome 的值本身就是一致的，
+# 伪造成不完整列表反而会与 mimeTypes、Accept-Language 对不上。
 STEALTH_JS = """
-Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-Object.defineProperty(navigator, 'languages', {get: () => ['zh-CN', 'zh', 'en-US', 'en']});
-Object.defineProperty(navigator, 'plugins', {
-    get: () => [
-        {name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', length: 1},
-        {name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', length: 1},
-        {name: 'Native Client', filename: 'internal-nacl-plugin', length: 1},
-    ]
-});
-window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}};
-const origQuery = window.navigator.permissions.query;
-window.navigator.permissions.query = (params) =>
-    params.name === 'notifications'
-        ? Promise.resolve({state: Notification.permission})
-        : origQuery(params);
+(() => {
+    try {
+        if (navigator.webdriver) {
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        }
+    } catch (e) {}
+    try {
+        if (!window.chrome) window.chrome = {};
+        if (!window.chrome.runtime) window.chrome.runtime = {};
+    } catch (e) {}
+    try {
+        const origQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (params) =>
+            params.name === 'notifications'
+                ? Promise.resolve({state: Notification.permission})
+                : origQuery(params);
+    } catch (e) {}
+})();
 """
 
 # S16: 常见第三方跟踪域名 — 在页面级拦截，防止跨平台指纹关联
@@ -57,6 +68,9 @@ class BrowserEngine:
         self._alive = False
         self._owned_pages = set()  # 主操作页集合，不在此集合的新弹出页会自动关闭
         self._popup_tasks: set[asyncio.Task] = set()  # 跟踪 _maybe_close 任务，防止 fire-and-forget 警告
+        # page -> [(status, url, resource_type)]，风险守卫读取
+        self._http_signals: dict = {}
+        self._engine = engine_name()
 
     @classmethod
     async def get_instance(cls) -> "BrowserEngine":
@@ -70,25 +84,40 @@ class BrowserEngine:
         return cls._instance
 
     async def _launch(self):
-        from playwright.async_api import async_playwright
         self._pw = await async_playwright().start()
         profile_dir = str(ROOT_DIR / "chrome_profile")
         os.makedirs(profile_dir, exist_ok=True)
-        self._context = await self._pw.chromium.launch_persistent_context(
+        launch_kwargs = dict(
             user_data_dir=profile_dir,
             channel="chrome",
             headless=HEADLESS,
             args=[
+                "--window-size=1440,900",
                 "--disable-blink-features=AutomationControlled",
-                "--disable-infobars",
                 "--no-first-run",
                 "--no-default-browser-check",
             ],
             ignore_default_args=["--enable-automation"],
-            viewport={"width": 1440, "height": 900},
+            # 用真实窗口尺寸，不做 viewport 模拟（innerWidth 与 outerWidth 一致）
+            no_viewport=True,
             locale="zh-CN",
-            timezone_id="Asia/Shanghai",
         )
+        try:
+            self._context = await self._pw.chromium.launch_persistent_context(
+                **launch_kwargs)
+        except Exception as e:
+            if self._engine != "rebrowser":
+                raise
+            log.warn("rebrowser launch failed, falling back to playwright",
+                     error=type(e).__name__, detail=str(e))
+            try:
+                await self._pw.stop()
+            except Exception:
+                pass
+            self._engine = "playwright"
+            self._pw = await stock_async_playwright()().start()
+            self._context = await self._pw.chromium.launch_persistent_context(
+                **launch_kwargs)
         await self._context.add_init_script(STEALTH_JS)
 
         # 监听新弹出页：用 opener() 区分主动创建 vs 弹出
@@ -137,10 +166,28 @@ class BrowserEngine:
 
         self._context.on("page", _on_page)
         self._alive = True
-        print("  [BrowserEngine] Chrome launched (persistent profile)", flush=True)
+        print(f"  [BrowserEngine] Chrome launched (persistent profile, "
+              f"engine={self._engine})", flush=True)
+
+    async def _close_resources(self):
+        """关闭 context 与 driver，供重启/退出复用。"""
+        if self._context:
+            try:
+                await self._context.close()
+            except Exception:
+                pass
+            self._context = None
+        if self._pw:
+            try:
+                await self._pw.stop()
+            except Exception:
+                pass
+            self._pw = None
+        self._http_signals.clear()
 
     async def _ensure_alive(self):
         if not self._alive or not self._context:
+            await self._close_resources()
             self._alive = False
             await self._launch()
 
@@ -148,23 +195,31 @@ class BrowserEngine:
         if self.__class__._lock is None:
             self.__class__._lock = asyncio.Lock()
         async with self.__class__._lock:
+            await self._ensure_alive()
             if len(self._owned_pages) >= 20:
                 raise RuntimeError(f"已打开 {len(self._owned_pages)} 个页面，超出上限")
+            try:
+                page = await self._context.new_page()
+            except Exception as e:
+                if "closed" in str(e).lower():
+                    log.error("context dead, will relaunch on next call",
+                              error=type(e).__name__, detail=str(e))
+                    self._alive = False
+                    self._context = None
+                raise
+            self._owned_pages.add(page)
 
-            await self._ensure_alive()
-        try:
-            page = await self._context.new_page()
-        except Exception as e:
-            if "closed" in str(e).lower():
-                log.error("context dead, will relaunch on next call",
-                          error=type(e).__name__, detail=str(e))
-                self._alive = False
-                self._context = None
-            raise
         page.set_default_timeout(PAGE_LOAD_TIMEOUT)
         page.set_default_navigation_timeout(PAGE_LOAD_TIMEOUT)
-        self._owned_pages.add(page)
-        page.once("close", lambda: self._owned_pages.discard(page))
+
+        def _on_close():
+            self._owned_pages.discard(page)
+            self._http_signals.pop(page, None)
+        page.once("close", _on_close)
+
+        # 记录 4xx/5xx 网络信号，供风险守卫判定风控/登录失效
+        self._http_signals[page] = []
+        page.on("response", lambda resp: self._note_response(page, resp))
 
         # S16: 页面级拦截第三方跟踪脚本，降低跨平台指纹关联风险
         async def _block_trackers(route):
@@ -176,6 +231,27 @@ class BrowserEngine:
             pass
 
         return page
+
+    def _note_response(self, page, resp):
+        try:
+            status = int(resp.status)
+            url = resp.url or ""
+            req = resp.request
+            rtype = req.resource_type if req else ""
+        except Exception:
+            return
+        if status < 400 or rtype not in ("document", "xhr", "fetch"):
+            return
+        bucket = self._http_signals.get(page)
+        if bucket is not None and len(bucket) < 20:
+            bucket.append((status, url, rtype))
+
+    def pop_http_signals(self, page):
+        """取出并清空该页累计的 HTTP 异常信号。"""
+        bucket = self._http_signals.get(page) or []
+        self._http_signals[page] = []
+        return list(bucket)
+
 
     async def close_page_clean(self, page):
         """关闭页面并清理 service worker / cache（S16 平台隔离增强）"""
@@ -198,18 +274,8 @@ class BrowserEngine:
             pass
 
     async def close(self):
-        if self._context:
-            try:
-                await self._context.close()
-            except Exception:
-                pass
-        if self._pw:
-            try:
-                await self._pw.stop()
-            except Exception:
-                pass
+        await self._close_resources()
         self._alive = False
-        self._context = None
         BrowserEngine._instance = None
         print("  [BrowserEngine] Chrome closed")
 
