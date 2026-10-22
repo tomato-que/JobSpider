@@ -20,6 +20,14 @@ set "APP_VERSION=2.2.0"
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
 
+if not exist "server.py" (
+    echo [ERROR] server.py not found in:
+    echo         %CD%
+    echo         Put run.bat in the JobSpider project root next to server.py.
+    pause
+    exit /b 1
+)
+
 if not defined JOBSPIDER_HOST set "JOBSPIDER_HOST=127.0.0.1"
 if not defined JOBSPIDER_PORT set "JOBSPIDER_PORT=8765"
 

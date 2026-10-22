@@ -36,6 +36,20 @@ echo   JobSpider v%APP_VERSION% - Deploy
 echo ========================================
 echo.
 
+if not exist "server.py" (
+    echo [ERROR] server.py not found in:
+    echo         %CD%
+    echo         Put this script in the JobSpider project root next to server.py.
+    echo         If you downloaded a ZIP, extract the whole archive first.
+    goto fail
+)
+if not exist "requirements.txt" (
+    echo [ERROR] requirements.txt not found in:
+    echo         %CD%
+    echo         Extract the complete JobSpider archive, then run this script again.
+    goto fail
+)
+
 call :find_python
 if not defined PY (
     echo [MISSING] Python 3.9+
