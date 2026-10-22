@@ -41,6 +41,7 @@ if not defined PY (
     echo [MISSING] Python 3.9+
     call :install_python
     if errorlevel 1 goto fail
+    ping -n 4 127.0.0.1 >nul
     call :find_python
     if not defined PY (
         echo [ERROR] Python was installed but is not visible in this window.
@@ -57,6 +58,7 @@ if errorlevel 1 (
     "%PY%" %PY_ARGS% --version
     call :install_python
     if errorlevel 1 goto fail
+    ping -n 4 127.0.0.1 >nul
     call :find_python
     if not defined PY (
         echo [ERROR] Python was installed but is not visible in this window.
@@ -66,6 +68,8 @@ if errorlevel 1 (
     "%PY%" %PY_ARGS% -c "import sys; raise SystemExit(0 if sys.version_info >= (3,9) else 1)" >nul 2>nul
     if errorlevel 1 (
         echo [ERROR] Python 3.9+ is still not available.
+        echo         Detected: %PY% %PY_ARGS%
+        "%PY%" %PY_ARGS% --version
         goto fail
     )
 )
@@ -139,22 +143,31 @@ set "PY="
 set "PY_ARGS="
 if defined JOBSPIDER_PYTHON if exist "%JOBSPIDER_PYTHON%" set "PY=%JOBSPIDER_PYTHON%"
 if not defined PY if exist "%ROOT%.venv\Scripts\python.exe" set "PY=%ROOT%.venv\Scripts\python.exe"
-if not defined PY (
-    py -3.9 -c "import sys" >nul 2>nul
-    if not errorlevel 1 (
-        set "PY=py"
-        set "PY_ARGS=-3.9"
+
+rem Ask the py launcher first: it knows custom install locations too.
+for %%V in (3.9 3.10 3.11 3.12 3.13) do (
+    if not defined PY (
+        py -%%V -c "import sys" >nul 2>nul
+        if not errorlevel 1 (
+            set "PY=py"
+            set "PY_ARGS=-%%V"
+        )
     )
 )
 if not defined PY (
-    py -3.12 -c "import sys" >nul 2>nul
+    py -3 -c "import sys" >nul 2>nul
     if not errorlevel 1 (
         set "PY=py"
-        set "PY_ARGS=-3.12"
+        set "PY_ARGS=-3"
     )
 )
-if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
-if not defined PY if exist "%ProgramFiles%\Python312\python.exe" set "PY=%ProgramFiles%\Python312\python.exe"
+
+rem Fall back to concrete install paths (python.org / winget).
+for %%V in (39 310 311 312 313) do (
+    if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe"
+    if not defined PY if exist "%ProgramFiles%\Python%%V\python.exe" set "PY=%ProgramFiles%\Python%%V\python.exe"
+    if not defined PY if exist "C:\Python%%V\python.exe" set "PY=C:\Python%%V\python.exe"
+)
 if not defined PY (
     where python >nul 2>nul
     if not errorlevel 1 set "PY=python"
@@ -198,11 +211,11 @@ if not errorlevel 1 (
 )
 
 echo [INSTALL] Python packages from requirements.txt ...
-"%PY%" %PY_ARGS% -m pip install -r requirements.txt
+"%PY%" %PY_ARGS% -m pip install --timeout 60 --retries 5 -r requirements.txt
 if errorlevel 1 (
     if defined VIRTUAL_ENV exit /b 1
     echo [RETRY] pip install --user ...
-    "%PY%" %PY_ARGS% -m pip install --user -r requirements.txt
+    "%PY%" %PY_ARGS% -m pip install --timeout 60 --retries 5 --user -r requirements.txt
     if errorlevel 1 exit /b 1
 )
 
@@ -224,7 +237,7 @@ if not errorlevel 1 (
     exit /b 0
 )
 echo [INSTALL] Playwright engine ...
-"%PY%" %PY_ARGS% -m pip install -r requirements.txt
+"%PY%" %PY_ARGS% -m pip install --timeout 60 --retries 5 -r requirements.txt
 if errorlevel 1 exit /b 1
 echo [OK] Playwright engine
 exit /b 0

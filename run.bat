@@ -92,9 +92,14 @@ rem ============================================================
 set "PY="
 if defined JOBSPIDER_PYTHON if exist "%JOBSPIDER_PYTHON%" set "PY=%JOBSPIDER_PYTHON%"
 if not defined PY if exist "%ROOT%.venv\Scripts\python.exe" set "PY=%ROOT%.venv\Scripts\python.exe"
-if not defined PY for /f "usebackq delims=" %%P in (`py -3.9 -c "import sys;print(sys.executable)" 2^>nul`) do set "PY=%%P"
-if not defined PY for /f "usebackq delims=" %%P in (`py -3.12 -c "import sys;print(sys.executable)" 2^>nul`) do set "PY=%%P"
-if not defined PY for /f "usebackq delims=" %%P in (`py -3 -c "import sys;print(sys.executable)" 2^>nul`) do set "PY=%%P"
+for %%V in (3.9 3.10 3.11 3.12 3.13 3) do (
+    if not defined PY for /f "usebackq delims=" %%P in (`py -%%V -c "import sys;print(sys.executable)" 2^>nul`) do set "PY=%%P"
+)
+for %%V in (39 310 311 312 313) do (
+    if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python%%V\python.exe"
+    if not defined PY if exist "%ProgramFiles%\Python%%V\python.exe" set "PY=%ProgramFiles%\Python%%V\python.exe"
+    if not defined PY if exist "C:\Python%%V\python.exe" set "PY=C:\Python%%V\python.exe"
+)
 if not defined PY (
     where python >nul 2>nul
     if not errorlevel 1 set "PY=python"
@@ -110,7 +115,7 @@ exit /b 0
 "%PY%" -c "import fastapi,uvicorn,pydantic,httpx,bs4,lxml,feedparser,dotenv,aiofiles,rich,dateutil,pypdf,docx,multipart" >nul 2>nul
 if errorlevel 1 (
     echo [INFO] Installing dependencies from requirements.txt ...
-    "%PY%" -m pip install -r requirements.txt
+    "%PY%" -m pip install --timeout 60 --retries 5 -r requirements.txt
     if errorlevel 1 (
         echo [ERROR] pip install failed.
         exit /b 1
@@ -122,7 +127,7 @@ if errorlevel 1 (
     "%PY%" -c "import playwright" >nul 2>nul
     if errorlevel 1 (
         echo [INFO] Installing Playwright engine ...
-        "%PY%" -m pip install -r requirements.txt
+        "%PY%" -m pip install --timeout 60 --retries 5 -r requirements.txt
         if errorlevel 1 exit /b 1
     )
 )
