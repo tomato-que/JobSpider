@@ -1250,6 +1250,10 @@ class LoginRequest(BaseModel):
 async def open_login_window(body: LoginRequest):
     """在项目 chrome_profile 里打开各平台登录页，登录后 cookie 会被后续任务复用。"""
     from core.login_manager import open_login
+    if any(t.get("status") in ("running", "pending", "stopping")
+           for t in tasks.values()):
+        raise HTTPException(status_code=409,
+                            detail="任务运行中，请先停止任务再打开登录窗口")
     _cancel_idle_browser_close()
     return await open_login(body.platforms or [])
 
