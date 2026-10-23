@@ -1797,10 +1797,22 @@
                   <span class="city-placeholder">点击选择城市（支持搜索）</span>
                   <span class="city-caret">▾</span>
                 </div>
-                <div id="cityPanel" class="city-combo-pop">
+                <div id="cityPanel" class="city-combo-pop"
+                     onclick="event.stopPropagation()">
                   <input class="input" id="citySearch" placeholder="🔍 输入城市名搜索（也可直接浏览下方列表）"
                          style="font-size:12px" oninput="filterCities()" autocomplete="off">
+                  <div id="cityNoMatch"
+                       style="display:none;color:var(--text-muted);font-size:11.5px;padding:8px 2px">
+                    没有匹配城市，试试「清空搜索」
+                  </div>
                   <div id="cityProvinces" class="city-combo-body"></div>
+                  <div style="display:flex;gap:6px;justify-content:space-between;margin-top:8px;
+                              padding-top:8px;border-top:1px solid var(--border-subtle)">
+                    <button type="button" class="btn btn-ghost btn-sm"
+                            onclick="clearCitySearch()">清空搜索</button>
+                    <button type="button" class="btn btn-primary btn-sm"
+                            onclick="closeCityPanel()">完成</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2314,6 +2326,10 @@
                     <input class="pj-jobs-search" id="pjCitySearch" placeholder="搜城市名…"
                            oninput="pjFilterCities()" autocomplete="off">
                     <div id="pjCityProvinces" class="pj-jobs-list"></div>
+                    <div id="pjCityNoMatch"
+                         style="display:none;color:var(--text-muted);font-size:11.5px;padding:8px 2px">
+                      没有匹配城市，清空搜索后重试
+                    </div>
                     <div class="pj-jobs-bar">
                       <button type="button" class="btn btn-ghost btn-sm" onclick="pjSelectAllCities(true)">全选</button>
                       <button type="button" class="btn btn-ghost btn-sm" onclick="pjInvertCities()">反选</button>
@@ -2864,6 +2880,9 @@ function renderCityPanel() {
     html += '</div>';
   }
   wrap.innerHTML = html;
+  // 重新渲染会重置 display，保留当前搜索词的过滤状态
+  const s = q('#citySearch');
+  if (s && s.value.trim()) filterCities();
 }
 
 function renderCitySelected() {
@@ -2913,10 +2932,15 @@ document.addEventListener('keydown', (e) => {
 
 function filterCities() {
   const kw = q('#citySearch').value.trim().toLowerCase();
+  let visible = 0;
   q('#cityProvinces').querySelectorAll('.city-pill').forEach(el => {
     const txt = el.textContent.toLowerCase();
-    el.style.display = !kw || txt.includes(kw) ? '' : 'none';
+    const show = !kw || txt.includes(kw);
+    el.style.display = show ? '' : 'none';
+    if (show) visible += 1;
   });
+  const noMatch = q('#cityNoMatch');
+  if (noMatch) noMatch.style.display = (kw && visible === 0) ? '' : 'none';
   // Hide province labels whose group has no visible pills (only when searching)
   q('#cityProvinces').querySelectorAll('.prov-label').forEach(label => {
     if (!kw) { label.style.display = ''; return; }
@@ -2930,6 +2954,14 @@ function filterCities() {
     label.style.display = anyVisible ? '' : 'none';
     if (n) n.style.display = anyVisible ? '' : 'none';
   });
+}
+
+function clearCitySearch() {
+  const s = q('#citySearch');
+  if (!s) return;
+  s.value = '';
+  filterCities();
+  s.focus();
 }
 
 // ========== RESULT FILTERS ==========
@@ -4262,6 +4294,8 @@ function pjRenderCityPanel() {
   // 切省时清空右侧搜索框
   const s = q('#pjCitySearch');
   if (s) s.value = '';
+  const nm = q('#pjCityNoMatch');
+  if (nm) nm.style.display = 'none';
 }
 
 function pjPickProvince(el, ev) {
@@ -4370,10 +4404,15 @@ function pjOpenCityPanel(ev) {
 
 function pjFilterCities() {
   const kw = ((q('#pjCitySearch') || {}).value || '').trim().toLowerCase();
+  let visible = 0;
   q('#pjCityProvinces').querySelectorAll('.pj-job-pill').forEach(el => {
     const c = (el.dataset.city || '').toLowerCase();
-    el.classList.toggle('hidden', kw && !c.includes(kw));
+    const hide = kw && !c.includes(kw);
+    el.classList.toggle('hidden', hide);
+    if (!hide) visible += 1;
   });
+  const nm = q('#pjCityNoMatch');
+  if (nm) nm.style.display = (kw && visible === 0) ? '' : 'none';
 }
 
 // L13: 公开岗位区域统一 document click 委托（合并 6 个监听器 → 1 个）

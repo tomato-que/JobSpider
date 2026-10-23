@@ -116,7 +116,7 @@ def _purge_old_output_files(days: int = 7):
         print(f"  [Cleanup] 清理 {count} 个超过 {days} 天的输出文件", flush=True)
 
 
-app = FastAPI(title="Job Scraper", version="2.3.0", lifespan=_lifespan)
+app = FastAPI(title="Job Scraper", version="2.3.1", lifespan=_lifespan)
 
 # M10: CORS — 默认只允许本机来源
 from fastapi.middleware.cors import CORSMiddleware

@@ -24,7 +24,7 @@ rem  Optional:
 rem    JOBSPIDER_PYTHON     path to python.exe
 rem ============================================================
 
-set "APP_VERSION=2.3.0"
+set "APP_VERSION=2.3.1"
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
 

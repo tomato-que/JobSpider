@@ -16,7 +16,7 @@ rem    run.bat           start and open browser
 rem    run.bat noopen    start only, do not open browser
 rem ============================================================
 
-set "APP_VERSION=2.3.0"
+set "APP_VERSION=2.3.1"
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
 
