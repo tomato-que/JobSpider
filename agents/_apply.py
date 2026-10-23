@@ -26,47 +26,75 @@ class ApplyMixin:
 
     # ──────── 投递：获取完整 JD ────────
 
+    _JD_SELECTORS = (
+        '.job-sec-text, .job-detail__content, .job_msg, .bmsg, .describtion, '
+        '.job-intro-container, .job-description, .job-detail, '
+        '.position-content, .des, [class*="job-desc"], [class*="job-detail"]'
+    )
+
+    async def _jd_page(self):
+        """复用一个详情页标签：避免每单开关标签带来的闪烁与额外导航。"""
+        page = getattr(self, "_jd_reuse_page", None)
+        if page is not None:
+            try:
+                if not page.is_closed():
+                    return page
+            except Exception:
+                pass
+        page = await self.engine.new_page()
+        self._jd_reuse_page = page
+        return page
+
+    async def _close_jd_page(self):
+        page = getattr(self, "_jd_reuse_page", None)
+        self._jd_reuse_page = None
+        if page is not None:
+            try:
+                if not page.is_closed():
+                    await page.close()
+            except Exception:
+                pass
+
     async def _fetch_jd_text(self, job: JobInfo) -> str:
-        """打开职位详情页提取完整JD文本，然后关闭标签页。
+        """在复用的详情页里读取完整 JD。
 
         用于投递前让 LLM 读取完整 JD 生成个性化打招呼语。
+        页面不复用关闭：同一平台的下一单直接导航过去，减少标签闪烁。
         """
         if not job.job_url:
             return ""
-        detail_page = None
         name = self.platform_cfg["name"]
+        page = None
         try:
-            detail_page = await self.fetch_page(job.job_url, network_idle=True)
-            await asyncio.sleep(gaussian_delay(1.0, 2.0))
-            jd_text = await self.eval_js(detail_page, """() => {
-                const sels = [
-                    '.job-sec-text', '.job-detail__content', '.job_msg',
-                    '.bmsg', '.describtion', '.job-intro-container',
-                    '.job-description', '.job-detail', '.position-content',
-                    '.des', '[class*="job-desc"]', '[class*="job-detail"]',
-                ];
-                for (const sel of sels) {
+            page = await self._jd_page()
+            await page.goto(job.job_url, wait_until="domcontentloaded",
+                            timeout=20000)
+            # 用元素等待替代固定 sleep：JD 容器出现就开始读
+            try:
+                await page.wait_for_selector(self._JD_SELECTORS, timeout=6000,
+                                             state="attached")
+            except Exception:
+                pass
+            jd_text = await self.eval_js(page, f"""() => {{
+                const sels = {js_literal(self._JD_SELECTORS)}.split(',')
+                    .map(s => s.trim()).filter(Boolean);
+                for (const sel of sels) {{
                     const el = document.querySelector(sel);
-                    if (el && el.textContent.trim().length > 20) {
+                    if (el && el.textContent.trim().length > 20) {{
                         return el.textContent.trim().slice(0, 2000);
-                    }
-                }
+                    }}
+                }}
                 const main = document.querySelector('main, .main, .content, article');
                 if (main) return main.textContent.trim().slice(0, 2000);
                 return '';
-            }""")
+            }}""")
             if jd_text:
                 print(f"  [{name}] 获取JD: {len(jd_text)}字", flush=True)
             return jd_text or ""
         except Exception as e:
             print(f"  [{name}] 获取JD失败: {e}", flush=True)
+            await self._close_jd_page()
             return ""
-        finally:
-            if detail_page:
-                try:
-                    await detail_page.close()
-                except Exception:
-                    pass
 
     # ──────── 投递：生成打招呼语 ────────
 
@@ -141,6 +169,10 @@ class ApplyMixin:
         cached = self._greeting_cache.get(cache_key)
         if cached:
             return cached
+        if not getattr(self, "SUPPORTS_GREETING", True):
+            # 平台没有可注入的聊天框，生成出来也无处发送
+            self._greeting_cache[cache_key] = ""
+            return ""
 
         jd_text = (job.job_description or "").strip()
         if self._should_fetch_jd(params):
@@ -514,6 +546,20 @@ class ApplyMixin:
 
         prep_job = None
         prep_task = None
+        # 提前预取第一个可能投递的岗位：把 JD 抓取 + LLM 招呼语
+        # 与前面的台账/筛选检查重叠，避免第一单明显卡一下。
+        _cap_blocked = (
+            (platform_limit is not None and platform_limit <= 0)
+            or (daily_cap_for_me is not None
+                and db_applied_today >= daily_cap_for_me)
+        )
+        if not _cap_blocked:
+            _first = _next_prefetchable(0)
+            if _first is not None:
+                prep_job = _first
+                prep_task = asyncio.create_task(
+                    self._prepare_job(_first, params))
+
         should_stop_fn = getattr(self, "should_stop", None)
         try:
             for idx, job in enumerate(jobs):
@@ -626,8 +672,11 @@ class ApplyMixin:
                     break
 
                 if dry_run:
-                    greeting_dr = await self.generate_greeting(
-                        job, job.job_title or "", params)
+                    if getattr(self, "SUPPORTS_GREETING", True):
+                        greeting_dr = await self.generate_greeting(
+                            job, job.job_title or "", params)
+                    else:
+                        greeting_dr = ""
                     job.apply_status = "dry_run"
                     job.greeting_sent = greeting_dr
                     job.applied = False

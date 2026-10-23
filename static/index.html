@@ -1882,6 +1882,31 @@
               </div>
             </div>
 
+            <div class="field">
+              <label class="field-hint">
+                登录状态 <span style="font-weight:400;color:var(--text-muted)">(用项目专用 profile，登录一次即可复用)</span>
+              </label>
+              <div id="loginStatusList"
+                   style="font-size:11.5px;color:var(--text-muted);line-height:1.7;margin-bottom:8px">
+                点「检查登录」查看各平台状态
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <button class="btn btn-ghost btn-sm" id="btnLoginCheck"
+                        onclick="checkLoginStatus(false)">检查登录</button>
+                <button class="btn btn-ghost btn-sm" id="btnLoginProbe"
+                        onclick="checkLoginStatus(true)"
+                        title="对未确认的平台打开首页做 DOM 探测，较慢">页面确认</button>
+                <button class="btn btn-primary btn-sm" id="btnLoginOpen"
+                        onclick="openLoginWindow()">打开登录窗口</button>
+                <button class="btn btn-ghost btn-sm" id="btnLoginClose"
+                        onclick="closeLoginWindow()">关闭登录窗口</button>
+              </div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:6px;line-height:1.5">
+                登录窗口会打开项目 <code>chrome_profile</code> 里的 Chrome；登录后直接关闭该窗口，再开始抓取。
+                不要用日常 Chrome 登录，否则读不到登录态。
+              </div>
+            </div>
+
             <!-- ===== 防封号 / 上限控制 ===== -->
             <div class="field">
               <label class="field-hint">
@@ -3512,6 +3537,70 @@ async function loadConfigFromServer() {
   } catch {}
 }
 
+// ========== 登录状态 / 登录窗口 ==========
+const LOGIN_STATE_LABEL = {
+  logged_in: ['已登录', 'var(--green)'],
+  unknown: ['未确认', 'var(--text-muted)'],
+  logged_out: ['未登录', '#d9534f'],
+};
+
+async function checkLoginStatus(probe) {
+  const box = q('#loginStatusList');
+  const btn = q('#btnLoginCheck');
+  if (!box) return;
+  if (btn) { btn.disabled = true; btn.textContent = '检查中…'; }
+  try {
+    const r = await fetch('/api/login/status' + (probe ? '?probe=true' : ''));
+    const d = await r.json();
+    const rows = Object.entries(d.platforms || {}).map(([key, v]) => {
+      const [label, color] = LOGIN_STATE_LABEL[v.state] || [v.state, 'inherit'];
+      return `<div style="display:flex;justify-content:space-between;gap:8px">
+        <span>${esc(v.name)}</span>
+        <span style="color:${color}">${label}</span></div>`;
+    });
+    const note = d.running ? '' :
+      '<div style="color:var(--text-muted);margin-bottom:4px">浏览器未启动，先点「打开登录窗口」</div>';
+    box.innerHTML = note + rows.join('');
+  } catch (e) {
+    box.textContent = '检查失败：' + e.message;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '检查登录'; }
+  }
+}
+
+async function openLoginWindow() {
+  const btn = q('#btnLoginOpen');
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '打开中…';
+  try {
+    const r = await fetch('/api/login/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platforms: ['boss', 'zhilian', 'job51', 'liepin'] }),
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || '打开失败');
+    toast('登录窗口已打开，登录完成后关闭该窗口再开始抓取', 'ok', 6000);
+    setTimeout(checkLoginStatus, 1200);
+  } catch (e) {
+    toast('打开登录窗口失败：' + e.message, 'err', 8000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+async function closeLoginWindow() {
+  try {
+    await fetch('/api/login/close', { method: 'POST' });
+    toast('已关闭登录窗口页面', 'ok');
+    setTimeout(checkLoginStatus, 800);
+  } catch (e) {
+    toast('关闭失败：' + e.message, 'err');
+  }
+}
+
 // ========== 简历（LLM 页） ==========
 const RESUME_SOURCE_LABEL = {
   llm: 'LLM 解析',
@@ -3652,6 +3741,7 @@ async function deleteResume() {
 initTheme();
 loadConfigFromServer();
 loadResume();
+checkLoginStatus();
 loadIndustries();
 loadCities();
 loadHistory();

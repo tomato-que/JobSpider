@@ -17,6 +17,9 @@ from config import gaussian_delay
 
 class Job51Agent(BaseAgent):
 
+    # 51job 没有 web 聊天输入框：跳过 JD 抓取和招呼语生成，省一次 LLM 调用
+    SUPPORTS_GREETING = False
+
     SEARCH_INPUT_SELECTORS = [
         '#search-input',
         '.el-input__inner',
@@ -82,8 +85,7 @@ class Job51Agent(BaseAgent):
             ),
             button_texts=['投递', '申请职位', '申请', '立即申请', '立即投递'],
         )
-        await asyncio.sleep(gaussian_delay(0.3, 0.6))
-        result = await self.human_click(page, find_js)
+        result = await self.human_click(page, find_js, (0.1, 0.25))
         if not result.get("clicked"):
             reason = result.get("reason", "unknown")
             if reason == "already":
@@ -99,7 +101,7 @@ class Job51Agent(BaseAgent):
             '[class*="dialog"], [class*="popup"]'
         )
         try:
-            await page.wait_for_selector(popup_sel, timeout=3000, state="visible")
+            await page.wait_for_selector(popup_sel, timeout=2000, state="visible")
         except Exception:
             pass
 

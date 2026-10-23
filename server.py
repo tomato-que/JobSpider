@@ -58,6 +58,13 @@ async def _lifespan(app: FastAPI):
         yield
     finally:
         # shutdown
+        _cancel_idle_browser_close()
+        try:
+            from core.browser_engine import BrowserEngine
+            if BrowserEngine._instance:
+                await BrowserEngine._instance.close()
+        except Exception:
+            pass
         await db.close_db()
         try:
             from sources._http import close_client
@@ -109,7 +116,7 @@ def _purge_old_output_files(days: int = 7):
         print(f"  [Cleanup] 清理 {count} 个超过 {days} 天的输出文件", flush=True)
 
 
-app = FastAPI(title="Job Scraper", version="2.2.0", lifespan=_lifespan)
+app = FastAPI(title="Job Scraper", version="2.3.0", lifespan=_lifespan)
 
 # M10: CORS — 默认只允许本机来源
 from fastapi.middleware.cors import CORSMiddleware
@@ -150,13 +157,51 @@ async def _rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 # 任务状态存储（内存中保留最近 N 个，更早的从 DB 取）
-tasks: "OrderedDict[str, dict]" = OrderedDict()
-# WebSocket 连接
+tasks: "OrderedDict[str, dict]" = OrderedDict()# WebSocket 连接
 active_ws: dict[str, list[WebSocket]] = {}
 # 任务结果缓存（同样 LRU 限制）
 task_results: "OrderedDict[str, dict]" = OrderedDict()
 
 _MAX_INMEM_TASKS = 32  # 超过这个数就丢最旧的；DB 仍保留完整记录
+
+# 浏览器空闲保留：任务结束后不立刻关 Chrome，避免下次任务重新启动窗口、
+# 也避免部分平台的登录 cookie 在关闭时丢失。0 = 立即关闭。
+_BROWSER_IDLE_MIN = float(os.getenv("JOBSPIDER_BROWSER_KEEP_MIN", "15"))
+_browser_close_task: Optional[asyncio.Task] = None
+
+
+def _cancel_idle_browser_close():
+    global _browser_close_task
+    if _browser_close_task is not None and not _browser_close_task.done():
+        _browser_close_task.cancel()
+    _browser_close_task = None
+
+
+def _schedule_idle_browser_close():
+    """任务结束后延迟关闭浏览器；期间新任务/登录窗口会取消这个定时器。"""
+    global _browser_close_task
+    _cancel_idle_browser_close()
+    if _BROWSER_IDLE_MIN <= 0:
+        from core.browser_engine import BrowserEngine
+        if BrowserEngine._instance:
+            asyncio.create_task(BrowserEngine._instance.close())
+        return
+    delay = _BROWSER_IDLE_MIN * 60
+
+    async def _close_later():
+        try:
+            await asyncio.sleep(delay)
+            from core.browser_engine import BrowserEngine
+            if BrowserEngine._instance:
+                print(f"  [BrowserEngine] 空闲 {_BROWSER_IDLE_MIN:g} 分钟，关闭浏览器",
+                      flush=True)
+                await BrowserEngine._instance.close()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"  [BrowserEngine] 空闲关闭失败: {e}", flush=True)
+
+    _browser_close_task = asyncio.create_task(_close_later())
 
 
 def _remember_task(task_id: str, entry: dict):
@@ -1195,6 +1240,34 @@ async def remove_resume():
     return {"ok": True, "deleted": delete_resume()}
 
 
+# ───────── 登录窗口 / 登录态 ─────────
+
+class LoginRequest(BaseModel):
+    platforms: list[str] = ["boss", "zhilian", "job51", "liepin"]
+
+
+@app.post("/api/login/open")
+async def open_login_window(body: LoginRequest):
+    """在项目 chrome_profile 里打开各平台登录页，登录后 cookie 会被后续任务复用。"""
+    from core.login_manager import open_login
+    _cancel_idle_browser_close()
+    return await open_login(body.platforms or [])
+
+
+@app.get("/api/login/status")
+async def login_status(probe: bool = Query(False, description="对 cookie 未知的平台做页面探测")):
+    from core.login_manager import check_status
+    return await check_status(probe_dom=probe)
+
+
+@app.post("/api/login/close")
+async def close_login_window():
+    from core.login_manager import close_login_pages
+    await close_login_pages()
+    _schedule_idle_browser_close()
+    return {"ok": True}
+
+
 _DEFAULT_WS_ORIGINS = {"http://127.0.0.1:8765", "http://localhost:8765"}
 
 
@@ -1297,6 +1370,8 @@ async def _broadcast(task_id: str, payload: dict):
 
 async def _run_scrape(task_id: str, req: ScrapeRequest):
     """后台执行抓取任务，支持多关键词 × 多城市，可中途停止"""
+    # 新任务复用现有浏览器窗口（登录态也还在），取消空闲关闭定时器
+    _cancel_idle_browser_close()
     # S17: 持有本地引用，防止 LRU 淘汰后 KeyError
     entry = tasks[task_id]
 
@@ -1469,14 +1544,10 @@ async def _run_scrape(task_id: str, req: ScrapeRequest):
     await db.update_task(task_id, finished=True)
     await db.refresh_task_counters(task_id)
 
-    # 任务（含所有 kw×city 组合）跑完后，统一关闭浏览器。
-    # MasterAgent.run() 不再自行关闭，避免每个组合都重启 Chrome。
-    try:
-        from core.browser_engine import BrowserEngine
-        if BrowserEngine._instance:
-            await BrowserEngine._instance.close()
-    except Exception as e:
-        print(f"  [Task {task_id}] 关闭浏览器异常: {e}", flush=True)
+    # 任务（含所有 kw×city 组合）跑完后，不再立即关浏览器：
+    # 保留窗口可以复用登录态（部分平台会清 session cookie），也让下一次
+    # 任务不必重新冷启动 Chrome。超过 JOBSPIDER_BROWSER_KEEP_MIN 分钟无任务再关。
+    _schedule_idle_browser_close()
 
     print(f"  [Task {task_id}] finished: {entry['status']}", flush=True)
 

@@ -121,7 +121,7 @@ class ZhilianAgent(BaseAgent):
         page = await self.fetch_page(
             self.platform_cfg["search_url"], network_idle=True,
         )
-        await asyncio.sleep(gaussian_delay(1, 2))
+        await asyncio.sleep(gaussian_delay(0.4, 0.9))
         pre_err = await self._pre_check(page)
         if pre_err:
             raise RuntimeError(pre_err)
@@ -131,7 +131,7 @@ class ZhilianAgent(BaseAgent):
         if not filled:
             print(f"  [{name}] search input not found")
         await self.click_search_button(page, self.SEARCH_BUTTON_SELECTORS)
-        await asyncio.sleep(gaussian_delay(2, 4))
+        await asyncio.sleep(gaussian_delay(0.8, 1.5))
         # 城市选择在搜索结果页进行（"地点"筛选器）
         if params.city:
             await self._select_city(page, params.city)
@@ -179,8 +179,7 @@ class ZhilianAgent(BaseAgent):
             button_selectors='.collect-and-apply__btn, .apply-btn, [class*="apply"]',
             button_texts=['立即投递', '投递', '申请'],
         )
-        await asyncio.sleep(gaussian_delay(0.3, 0.6))
-        result = await self.human_click(page, find_js)
+        result = await self.human_click(page, find_js, (0.1, 0.25))
         if not result.get("clicked"):
             reason = result.get("reason", "unknown")
             if reason == "already":
@@ -196,7 +195,7 @@ class ZhilianAgent(BaseAgent):
             '[class*="modal"][class*="visible"]'
         )
         try:
-            await page.wait_for_selector(modal_sel, timeout=3000, state="visible")
+            await page.wait_for_selector(modal_sel, timeout=2000, state="visible")
         except Exception:
             pass
 
@@ -245,7 +244,7 @@ class ZhilianAgent(BaseAgent):
             }}""")
             if filled:
                 print(f"  [智联招聘] 已填打招呼语", flush=True)
-            await asyncio.sleep(gaussian_delay(0.4, 0.8))
+            await asyncio.sleep(gaussian_delay(0.2, 0.4))
 
         draft = (getattr(params, "apply_mode", "auto") or "auto").lower() == "draft"
         if draft and filled:
@@ -256,7 +255,8 @@ class ZhilianAgent(BaseAgent):
                 button_selectors='.zppp-modal .zppp-submit, .dialog-confirm, .btn-primary',
                 button_texts=['发送', '确认', '确定', '提交', '立即沟通', '投递'],
             )
-            confirm_result = await self.human_click(page, confirm_find)
+            confirm_result = await self.human_click(page, confirm_find,
+                                                   (0.1, 0.25))
             confirmed = (confirm_result.get("text")
                          if confirm_result.get("clicked") else None)
             if confirmed:
@@ -268,7 +268,7 @@ class ZhilianAgent(BaseAgent):
             else:
                 self._apply_detail = "[状态] 弹窗内未找到填框/确认按钮"
                 outcome = ApplyOutcome.FAILED
-        await asyncio.sleep(gaussian_delay(0.5, 0.9))
+        await asyncio.sleep(gaussian_delay(0.25, 0.5))
 
         # 关闭弹窗
         await self.eval_js(page, """() => {
@@ -277,7 +277,7 @@ class ZhilianAgent(BaseAgent):
             );
             if (close) close.click();
         }""")
-        await asyncio.sleep(gaussian_delay(0.3, 0.5))
+        await asyncio.sleep(gaussian_delay(0.15, 0.35))
         return outcome
 
     async def extract_list_page(self, page, params: SearchParams) -> list[JobInfo]:

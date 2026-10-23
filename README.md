@@ -156,7 +156,9 @@ Windows 也可以先双击 **`部署.bat`** 做一次环境部署：
 
 ### 4️⃣ 首次使用流程
 
-1. **平台登录** — 启动后选择 Boss/猎聘等需登录的平台，系统自动打开 Chrome，扫码即可（登录态会保存到 `chrome_profile/`，无需重复扫码）
+1. **平台登录** — 在左侧「登录状态」区域点 **打开登录窗口**，在弹出的 Chrome 里登录 Boss/智联/51job/猎聘。
+   登录窗口使用的是项目专用 `chrome_profile`，登录一次即可复用；**不要用日常 Chrome 登录**。
+   任务结束后浏览器会保留一段时间（默认 15 分钟），期间再次开始任务会复用同一个窗口。
 2. **填写偏好** — 在「✍️ 求职偏好」里写下你的期望（自然语言即可）：
    ```
    3年Python后端经验，想找北京/上海25k以上的岗位，
@@ -198,6 +200,7 @@ Windows 也可以先双击 **`部署.bat`** 做一次环境部署：
 | `JOBSPIDER_WECHAT_FEEDS` | `""` | 微信公众号 RSS 源（`url1\|名称1,url2\|名称2`） |
 | `JOBSPIDER_ENGINE` | `rebrowser` | 浏览器引擎：`rebrowser` / `playwright`（失败自动回退） |
 | `JOBSPIDER_JD_FETCH` | `auto` | `auto`=有 LLM 才抓 JD；`always`；`never`=不额外开详情页 |
+| `JOBSPIDER_BROWSER_KEEP_MIN` | `15` | 任务结束后浏览器空闲保留分钟数；0=立即关闭。保留期间复用同一窗口与登录态 |
 | `JOBSPIDER_APPLY_CONCURRENCY` | `2` | 跨平台同时执行投递动作的上限 |
 | `JOBSPIDER_COMBO_PAUSE` | `0` | 每个 kw×city 组合之间的休息秒数（0=关闭） |
 | `JOBSPIDER_BOSS_API` | `auto` | Boss 搜索 XHR 旁听：`auto` / `off` |

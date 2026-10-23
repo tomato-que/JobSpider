@@ -86,8 +86,7 @@ class BossAgent(BaseAgent):
             ),
             button_texts=['立即沟通', '继续沟通', '沟通', '在线沟通'],
         )
-        await asyncio.sleep(gaussian_delay(0.3, 0.6))
-        result = await self.human_click(page, find_js)
+        result = await self.human_click(page, find_js, (0.1, 0.25))
         if not result.get("clicked"):
             reason = result.get("reason", "unknown")
             if reason == "already":
@@ -107,7 +106,7 @@ class BossAgent(BaseAgent):
         )
         # 用元素等待替代固定 sleep：聊天框出现就继续，没出现再走三态判定
         try:
-            await page.wait_for_selector(chat_input_sel, timeout=5000,
+            await page.wait_for_selector(chat_input_sel, timeout=2500,
                                          state="visible")
         except Exception:
             pass
@@ -143,12 +142,13 @@ class BossAgent(BaseAgent):
                 self._apply_detail = "草稿未发送"
                 outcome = ApplyOutcome.UNCERTAIN
             else:
-                await asyncio.sleep(gaussian_delay(0.5, 0.9))
+                await asyncio.sleep(gaussian_delay(0.25, 0.45))
                 send_find = self.build_modal_button_finder(
                     button_selectors='.btn-send, .send-message, [class*="send-btn"]',
                     button_texts=['发送', '回车发送', 'Send'],
                 )
-                send_result = await self.human_click(page, send_find)
+                send_result = await self.human_click(page, send_find,
+                                                     (0.1, 0.25))
                 if send_result.get("clicked"):
                     print(f"  [Boss直聘] 已发送: '{send_result.get('text', '')}'",
                           flush=True)
@@ -161,7 +161,7 @@ class BossAgent(BaseAgent):
                     except Exception:
                         self._apply_detail = "已填写但未找到发送按钮"
                         outcome = ApplyOutcome.UNCERTAIN
-                await asyncio.sleep(gaussian_delay(0.5, 0.9))
+                await asyncio.sleep(gaussian_delay(0.25, 0.5))
         else:
             chat_open = await self.eval_js(page, """() => !!(document.querySelector(
                 '.chat-content, .chat-dialog, .dialog-wrap, .chat-container, '
@@ -175,23 +175,18 @@ class BossAgent(BaseAgent):
                 self._apply_detail = "[状态] 点击后未出现聊天输入框"
                 outcome = ApplyOutcome.FAILED
 
-        # 关闭聊天弹窗
+        # 关闭聊天弹窗，返回列表页（两步合并，减少一次往返等待）
         await self.eval_js(page, """() => {
             const close = document.querySelector(
                 '.dialog-close, .chat-close, .zppp-close, '
                 + '.close-btn, [class*="dialog"] .close, .ant-modal-close'
             );
             if (close) close.click();
-        }""")
-        await asyncio.sleep(gaussian_delay(0.3, 0.6))
-
-        # 返回列表页（如果导航到了聊天页面）
-        await self.eval_js(page, """() => {
             if (window.location.href.includes('/chat/')) {
                 window.history.back();
             }
         }""")
-        await asyncio.sleep(gaussian_delay(0.5, 1.0))
+        await asyncio.sleep(gaussian_delay(0.25, 0.55))
         return outcome
 
     # ──────── Boss 搜索 XHR 旁听 ────────

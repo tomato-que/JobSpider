@@ -43,8 +43,8 @@ class BrowserInteractionsMixin:
         try:
             sx = _random.uniform(100, 800)
             sy = _random.uniform(100, 600)
-            # 沿贝塞尔轨迹移动（用直线段近似），steps 3-6
-            steps = _random.randint(3, 6)
+            # 沿贝塞尔轨迹移动（直线段近似），steps 3-5
+            steps = _random.randint(3, 5)
             for i in range(1, steps + 1):
                 t = i / steps
                 # 二次贝塞尔：起点 sx,sy → 控制点（带随机偏移）→ 终点 cx,cy
@@ -54,8 +54,8 @@ class BrowserInteractionsMixin:
                 by = (1 - t) ** 2 * sy + 2 * (1 - t) * t * (
                     (sy + cy) / 2 + _random.uniform(-30, 30)
                 ) + t ** 2 * cy
-                await page.mouse.move(bx, by, steps=_random.randint(2, 5))
-                await asyncio.sleep(_random.uniform(0.02, 0.08))
+                await page.mouse.move(bx, by, steps=_random.randint(2, 4))
+                await asyncio.sleep(_random.uniform(0.01, 0.04))
         except Exception:
             pass
 
@@ -63,7 +63,7 @@ class BrowserInteractionsMixin:
         await asyncio.sleep(gaussian_delay(*before_click_pause))
 
         try:
-            await page.mouse.click(cx, cy, delay=_random.randint(50, 150))
+            await page.mouse.click(cx, cy, delay=_random.randint(40, 110))
             return {"clicked": True, **info}
         except Exception as e:
             return {"clicked": False, "reason": str(e), **info}

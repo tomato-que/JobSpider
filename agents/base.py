@@ -46,6 +46,8 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
     SCROLL_TIMES_FIRST: int = 3
     SCROLL_TIMES_NEXT: int = 2
     PAGE_TURN_DELAY: tuple = (2.0, 5.0)
+    # 是否有可注入文字的 web 聊天框。51job 没有：不需要抓 JD / 生成招呼语。
+    SUPPORTS_GREETING: bool = True
 
     def __init__(self, platform_key: str):
         from config import PLATFORM_CONFIG
@@ -68,6 +70,9 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
         # 本 agent 内的 LLM 缓存，避免跨组合重复调用
         self._greeting_cache: dict = {}
         self._rule_cache: dict = {}
+        # 风控检测节流：每单都做完整 DOM 探测会明显拖慢投递
+        self._last_risk_check = 0.0
+        self._risk_check_every = 4.0   # 秒；期间只看网络信号与 URL
         # Stop & global-limit hooks (injected by server / master agent)
         self._stop_check = None        # Callable[[], bool] — returns True if user requested stop
         self._global_limit = None      # int | None — task-level total cap across all platforms
@@ -254,7 +259,8 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
 
             # 先判登录墙/风控，再等列表容器：挑战页永远不会出现容器
             if await self._check_login_wall(page):
-                error_msg = f"Need to login {name} first"
+                error_msg = (f"{name} 未登录：请在控制台点「打开登录窗口」"
+                             f"完成登录后重试")
                 status = ScrapeStatus.FAILED
                 await self.risk.trip(self.platform_key,
                                      RiskSignal.LOGIN_REQUIRED, error_msg)
@@ -375,9 +381,9 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
             status = ScrapeStatus.FAILED if not all_jobs else ScrapeStatus.PARTIAL
             self.emit_progress(error_msg, "error")
         finally:
-            # 每个组合结束都清理：搜索页 + 平台残留的详情页。
+            # 每个组合结束都清理：搜索页 + 平台残留的详情页 + 复用页。
             try:
-                await self._cleanup_after_scrape()
+                await self.cleanup_pages()
             except Exception:
                 pass
             if page is not None:
@@ -412,13 +418,22 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
         """搜索后是否被登录墙拦截。默认不检查。"""
         return False
 
-    async def _check_anti_bot(self, page) -> bool:
+    async def _check_anti_bot(self, page, force: bool = False) -> bool:
         """全链路风控检测：URL / DOM / 网络响应 / 登录态。
 
         命中后写入平台级冷却并停止本平台后续动作；其他平台不受影响。
+        每条投递前都会调用；DOM 探测按 `_risk_check_every` 节流，
+        网络信号与 URL 检查仍然每次都做（便宜且能立刻发现限流/跳转）。
         """
-        signal, evidence = await self.risk.inspect(page, self.platform_key)
+        import time as _time
+        now = _time.monotonic()
+        light = (not force
+                 and now - self._last_risk_check < self._risk_check_every)
+        signal, evidence = await self.risk.inspect(page, self.platform_key,
+                                                   light=light)
         if signal == RiskSignal.OK:
+            if not light:
+                self._last_risk_check = now
             return False
         until = await self.risk.trip(self.platform_key, signal, evidence)
         self._platform_done = True
@@ -442,7 +457,7 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
         page = await self.fetch_page(
             self.platform_cfg["search_url"], network_idle=True,
         )
-        await asyncio.sleep(gaussian_delay(1, 2))
+        await asyncio.sleep(gaussian_delay(0.4, 0.9))
         pre_err = await self._pre_check(page)
         if pre_err:
             raise RuntimeError(pre_err)
@@ -464,6 +479,17 @@ class BaseAgent(BrowserInteractionsMixin, ApplyMixin, FilterMixin, ABC):
     async def _cleanup_after_scrape(self):
         """组合结束后的平台清理钩子（关闭 pending 详情页等）。"""
         return None
+
+    async def cleanup_pages(self):
+        """组合结束后回收本 agent 持有的复用页面。"""
+        try:
+            await self._cleanup_after_scrape()
+        except Exception:
+            pass
+        try:
+            await self._close_jd_page()
+        except Exception:
+            pass
 
     # ──────── 抽象方法 ────────
 

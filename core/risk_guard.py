@@ -207,8 +207,12 @@ class RiskGuard:
 
     # ───────── 页面检查 ─────────
 
-    async def inspect(self, page, platform: str):
-        """返回 (RiskSignal, evidence)。"""
+    async def inspect(self, page, platform: str, light: bool = False):
+        """返回 (RiskSignal, evidence)。
+
+        light=True 时跳过 DOM 探测，只做 URL / 标题 / 网络信号，
+        用于高频调用点（每条投递前）降低开销；判定到问题仍然有效。
+        """
         cfg = PLATFORM_PATTERNS.get(platform, {})
 
         # 1) URL
@@ -256,6 +260,8 @@ class RiskGuard:
             # 5xx 视为瞬态，交给重试，不熔断
 
         # 3) DOM
+        if light:
+            return RiskSignal.OK, ""
         try:
             hit = await page.evaluate(DOM_PROBE_JS, {
                 "verifySelectors": cfg.get("verify_selectors", []),

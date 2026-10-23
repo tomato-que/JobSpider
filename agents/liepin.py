@@ -81,7 +81,7 @@ class LiepinAgent(BaseAgent):
         from urllib.parse import quote as _quote
         url = f"https://www.liepin.com/zhaopin/?key={_quote(params.keyword)}"
         page = await self.fetch_page(url, network_idle=True)
-        await asyncio.sleep(gaussian_delay(1.0, 2.0))
+        await asyncio.sleep(gaussian_delay(0.4, 0.9))
 
         # 用 JS 关闭自动补全 + 点击搜索按钮（搜索按钮不是反爬检测目标，JS click 安全）
         search_ok = await self.eval_js(page, """() => {
@@ -135,7 +135,7 @@ class LiepinAgent(BaseAgent):
             except Exception:
                 pass
 
-        await asyncio.sleep(gaussian_delay(2, 4))
+        await asyncio.sleep(gaussian_delay(0.8, 1.5))
 
         # 验证搜索结果是否加载
         card_count = await self.eval_js(page, """() => {
@@ -263,7 +263,6 @@ class LiepinAgent(BaseAgent):
                 await p.close()
             except Exception:
                 pass
-
     async def apply_to_job(self, page, job, greeting, params) -> ApplyOutcome:
         """猎聘: 打开详情页 → 点击 a.btn-chat → 填写打招呼语 → 发送
 
@@ -454,7 +453,8 @@ class LiepinAgent(BaseAgent):
                     button_texts=['发送', '确认', '确定', '提交', '立即沟通',
                                   '开始沟通'],
                 )
-                confirm_result = await self.human_click(detail_page, confirm_find)
+                confirm_result = await self.human_click(detail_page, confirm_find,
+                                                       (0.1, 0.25))
                 confirmed = (confirm_result.get("text")
                              if confirm_result.get("clicked") else None)
                 if confirmed:
@@ -469,7 +469,7 @@ class LiepinAgent(BaseAgent):
                 else:
                     self._apply_detail = "[状态] 点击后无聊天入口"
                     outcome = ApplyOutcome.FAILED
-            await asyncio.sleep(gaussian_delay(0.5, 0.9))
+            await asyncio.sleep(gaussian_delay(0.25, 0.5))
 
             # 关闭弹窗
             await self.eval_js(detail_page, """() => {

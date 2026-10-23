@@ -232,6 +232,15 @@ class BrowserEngine:
 
         return page
 
+    async def goto_current(self, page, url: str, timeout: int = 40000):
+        """在已存在的页面里导航（登录窗口复用同一标签，避免多开）。"""
+        await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+        try:
+            await page.wait_for_load_state("load", timeout=8000)
+        except Exception:
+            pass
+        return page
+
     def _note_response(self, page, resp):
         try:
             status = int(resp.status)
